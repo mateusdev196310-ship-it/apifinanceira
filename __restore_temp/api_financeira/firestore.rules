@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAppCheckValid() {
+      return request.app != null;
+    }
+    function appConfig() {
+      return get(/databases/$(database)/documents/config/security).data;
+    }
+    function isAppCheckRequired() {
+      let cfg = appConfig();
+      return cfg != null && cfg.appCheckRequired == true;
+    }
+    function appCheckGate() {
+      return !isAppCheckRequired() || isAppCheckValid();
+    }
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      return isSignedIn() && ((request.auth.token.role == 'admin') || (request.auth.token.admin == true) || (request.auth.uid == 'adminuid'));
+    }
+    function isOwnerUser(uid) {
+      return isSignedIn() && (request.auth.uid == uid);
+    }
+    function accountDoc(accountId) {
+      return get(/databases/$(database)/documents/accounts/$(accountId)).data;
+    }
+    function isAccountOwnerOrMember(accountId) {
+      let acc = accountDoc(accountId);
+      return isSignedIn() && acc != null && (acc.ownerUid == request.auth.uid || (acc.members != null && acc.members[request.auth.uid] == true));
+    }
+    function validString(s, min, max) {
+      return s is string && s.size() >= min && s.size() <= max;
+    }
+    function validMoney(n) {
+      return n is number && n >= 0 && n <= 1000000000;
+    }
+    function validDate(d) {
+      return d is string && d.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+    function validCurrency(c) {
+      return c is string && c.size() > 0 && c.size() <= 6;
+    }
+    function validateTransaction(data) {
+      return validMoney(data.valor) &&
+             validString(data.descricao, 1, 200) &&
+             validString(data.categoria, 1, 80) &&
+             validCurrency(data.moeda) &&
+             validDate(data.data_referencia) &&
+             ((data.tipo == 'entrada') || (data.tipo == 'saida') || (data.tipo == 'ajuste') || (data.tipo == 'estorno') || (data.tipo == '0') || (data.tipo == '1')) &&
+             validString(data.accountId, 1, 128);
+    }
+    match /users/{uid} {
+      allow read, write: if (isOwnerUser(uid) && appCheckGate()) || isAdmin();
+    }
+    match /accounts/{accountId} {
+      allow read: if isAdmin() || (isAccountOwnerOrMember(accountId) && appCheckGate());
+      allow create: if isAdmin() || (isSignedIn() && appCheckGate() && request.resource.data.ownerUid == request.auth.uid && validString(request.resource.data.name, 1, 120));
+      allow update: if isAdmin() || (isAccountOwnerOrMember(accountId) && appCheckGate() && validString(request.resource.data.name, 1, 120));
+      allow delete: if isAdmin() || (isSignedIn() && appCheckGate() && accountDoc(accountId).ownerUid == request.auth.uid);
+    }
+    match /transactions/{txId} {
+      allow read: if isAdmin() || (isSignedIn() && appCheckGate());
+      allow create: if isAdmin() || (isSignedIn() && appCheckGate() && validateTransaction(request.resource.data));
+      allow update: if isAdmin() || (isSignedIn() && appCheckGate() && validateTransaction(request.resource.data));
+      allow delete: if isAdmin() || (isSignedIn() && appCheckGate());
+    }
+    match /clientes/{clienteId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+      match /dias/{dayId} {
+        allow read: if isAdmin();
+        allow write: if isAdmin();
+      }
+      match /meses/{monthId} {
+        allow read: if isAdmin();
+        allow write: if isAdmin();
+      }
+      match /transacoes/{dr}/items/{itemId} {
+        allow read: if isAdmin();
+        allow write: if isAdmin();
+      }
+    }
+    match /audit_logs/{logId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

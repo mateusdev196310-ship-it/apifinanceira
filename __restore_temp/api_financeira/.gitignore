@@ -1,0 +1,41 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.bak
+*.bak2
+*.zip
+*.tar
+*.gz
+*.rar
+.DS_Store
+
+# Secrets
+chave_firebase*.json
+
+# Data backups
+backup_firestore_*.json
+backups/
+__backups/
+
+# Uploads and media
+uploads/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.webp
+*.pdf
+*.ogg
+
+# Tests
+app/tests/
+**/tests/
+app/test_extractor_text.py
+security-tests/
