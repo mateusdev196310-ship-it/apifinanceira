@@ -1,0 +1,174 @@
+# arquivo: audio_processor.py
+import speech_recognition as sr
+import os
+import tempfile
+from app.services.gemini import get_client
+from google.genai import types
+import time
+import subprocess
+import shutil
+
+class AudioProcessor:
+    """Processa áudio do Telegram para texto."""
+    
+    def __init__(self):
+        self.recognizer = sr.Recognizer()
+    
+    
+    def transcribe_audio_bytes(self, audio_bytes, mime):
+        try:
+            try:
+                client = get_client()
+            except:
+                client = None
+            if client is not None:
+                blob = types.Blob(mime_type=mime, data=audio_bytes)
+                parts = [types.Part(text="Transcreva o áudio para texto em português do Brasil. Retorne apenas o texto transcrito.")]
+                parts.append(types.Part(inline_data=blob))
+                contents = [types.Content(role='user', parts=parts)]
+                models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash', 'gemini-1.5-pro']
+                delays = [0.8, 1.5, 2.5, 3.0, 3.5]
+                for i, mdl in enumerate(models):
+                    try:
+                        resp = client.models.generate_content(
+                            model=mdl,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                temperature=0.0,
+                                max_output_tokens=800,
+                            ),
+                        )
+                        texto = (resp.text or "").strip()
+                        if texto:
+                            return texto
+                    except Exception as e:
+                        msg = str(e) if e else ""
+                        if "RESOURCE_EXHAUSTED" in msg or "429" in msg or "Too Many Requests" in msg:
+                            time.sleep(delays[i] if i < len(delays) else 1.0)
+                            continue
+                        if "404" in msg or "Not Found" in msg:
+                            continue
+                        continue
+            return None
+        except:
+            return None
+    
+    def transcribe_audio(self, audio_path):
+        try:
+            try:
+                client = get_client()
+            except:
+                client = None
+            if client is not None:
+                try:
+                    with open(audio_path, 'rb') as f:
+                        dados = f.read()
+                    mime = 'audio/wav' if audio_path.endswith('.wav') else ('audio/ogg' if audio_path.endswith('.ogg') else 'audio/mpeg')
+                    texto = self.transcribe_audio_bytes(dados, mime)
+                    if texto:
+                        return texto
+                except:
+                    pass
+            if audio_path.endswith('.wav'):
+                with sr.AudioFile(audio_path) as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                    audio_data = self.recognizer.record(source)
+                    texto = self.recognizer.recognize_google(
+                        audio_data,
+                        language='pt-BR',
+                        show_all=False
+                    )
+                    return texto
+            return None
+        except sr.UnknownValueError:
+            return None
+        except sr.RequestError:
+            return None
+        except Exception:
+            return None
+        finally:
+            try:
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
+            except:
+                pass
+    
+    def transcribe_audio_file(self, audio_bytes, format='ogg'):
+        try:
+            mime = 'audio/wav' if format == 'wav' else ('audio/ogg' if format == 'ogg' else 'audio/mpeg')
+            texto = self.transcribe_audio_bytes(audio_bytes, mime)
+            if texto:
+                return texto
+            if format == 'wav':
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
+                    tmp_file.write(audio_bytes)
+                    temp_path = tmp_file.name
+                try:
+                    with sr.AudioFile(temp_path) as source:
+                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                        audio_data = self.recognizer.record(source)
+                        texto = self.recognizer.recognize_google(
+                            audio_data,
+                            language='pt-BR',
+                            show_all=False
+                        )
+                        return texto
+                except:
+                    return None
+                finally:
+                    try:
+                        os.remove(temp_path)
+                    except:
+                        pass
+            if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg'):
+                try:
+                    from imageio_ffmpeg import get_ffmpeg_exe
+                    ff = get_ffmpeg_exe()
+                except:
+                    ff = shutil.which('ffmpeg') or shutil.which('avconv')
+                if ff:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{format}') as in_file:
+                        in_file.write(audio_bytes)
+                        in_path = in_file.name
+                    out_path = in_path.replace(f'.{format}', '.wav')
+                    try:
+                        subprocess.run([ff, '-y', '-i', in_path, '-ar', '16000', '-ac', '1', out_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        with sr.AudioFile(out_path) as source:
+                            self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                            audio_data = self.recognizer.record(source)
+                            texto = self.recognizer.recognize_google(
+                                audio_data,
+                                language='pt-BR',
+                                show_all=False
+                            )
+                            return texto
+                    except:
+                        return None
+                    finally:
+                        try:
+                            if os.path.exists(in_path):
+                                os.remove(in_path)
+                            if os.path.exists(out_path):
+                                os.remove(out_path)
+                        except:
+                            pass
+            return None
+        except Exception:
+            return None
+
+# Instância global
+audio_processor = AudioProcessor()
+
+def testar_transcricao():
+    """Teste simples da transcrição."""
+    print("🧪 Testando transcrição...")
+    
+    # Criar um áudio de teste (simulado)
+    test_text = "gastei cinquenta reais no mercado e recebi mil reais de salário"
+    
+    # Em produção, você teria um arquivo de áudio real
+    print(f"📝 Texto esperado: {test_text}")
+    print("✅ Módulo de áudio carregado com sucesso!")
+    
+if __name__ == '__main__':
+    testar_transcricao()
