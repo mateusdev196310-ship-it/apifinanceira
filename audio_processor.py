@@ -1,5 +1,8 @@
 # arquivo: audio_processor.py
-import speech_recognition as sr
+try:
+    import speech_recognition as sr
+except Exception:
+    sr = None
 import os
 import tempfile
 from app.services.gemini import get_client
@@ -12,7 +15,10 @@ class AudioProcessor:
     """Processa áudio do Telegram para texto."""
     
     def __init__(self):
-        self.recognizer = sr.Recognizer()
+        try:
+            self.recognizer = sr.Recognizer() if sr is not None else None
+        except Exception:
+            self.recognizer = None
     
     
     def transcribe_audio_bytes(self, audio_bytes, mime):
@@ -69,7 +75,7 @@ class AudioProcessor:
                         return texto
                 except:
                     pass
-            if audio_path.endswith('.wav'):
+            if self.recognizer is not None and audio_path.endswith('.wav'):
                 with sr.AudioFile(audio_path) as source:
                     self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                     audio_data = self.recognizer.record(source)
@@ -100,6 +106,8 @@ class AudioProcessor:
             if texto:
                 return texto
             if format == 'wav':
+                if self.recognizer is None:
+                    return None
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                     tmp_file.write(audio_bytes)
                     temp_path = tmp_file.name
@@ -133,6 +141,8 @@ class AudioProcessor:
                     out_path = in_path.replace(f'.{format}', '.wav')
                     try:
                         subprocess.run([ff, '-y', '-i', in_path, '-ar', '16000', '-ac', '1', out_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        if self.recognizer is None:
+                            return None
                         with sr.AudioFile(out_path) as source:
                             self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                             audio_data = self.recognizer.record(source)
