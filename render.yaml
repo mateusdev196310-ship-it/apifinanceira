@@ -9,7 +9,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: FIREBASE_CREDENTIALS
-        value: /etc/secrets/chave_firebase.json
+        sync: false
       - key: API_HOST
         value: 0.0.0.0
   - type: worker
@@ -18,10 +18,12 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python telegram_bot.py
     envVars:
+      - key: GEMINI_API_KEY
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: FIREBASE_CREDENTIALS
-        value: /etc/secrets/chave_firebase.json
+        sync: false
       - key: API_URL
         fromService:
           type: web

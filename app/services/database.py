@@ -27,8 +27,31 @@ _db = None
 
 def _cred_path():
     p1 = os.getenv("FIREBASE_CREDENTIALS")
-    if p1 and os.path.exists(p1):
-        return p1
+    if p1:
+        if os.path.exists(p1):
+            return p1
+        s1 = str(p1).strip()
+        if s1.startswith("{"):
+            runtime_path = os.path.join(os.getcwd(), "__runtime_firebase_cred.json")
+            try:
+                if not os.path.exists(runtime_path):
+                    with open(runtime_path, "w", encoding="utf-8") as f:
+                        f.write(s1)
+                return runtime_path
+            except:
+                pass
+    p0 = os.getenv("FIREBASE_CREDENTIALS_JSON")
+    if p0:
+        s0 = str(p0).strip()
+        if s0.startswith("{"):
+            runtime_path2 = os.path.join(os.getcwd(), "__runtime_firebase_cred.json")
+            try:
+                if not os.path.exists(runtime_path2):
+                    with open(runtime_path2, "w", encoding="utf-8") as f:
+                        f.write(s0)
+                return runtime_path2
+            except:
+                pass
     p2 = os.path.join(os.getcwd(), "chave_firebase.json")
     if os.path.exists(p2):
         return p2
