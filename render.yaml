@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: api-financeira
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn api_financeira:app --bind 0.0.0.0:$PORT
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FIREBASE_CREDENTIALS
+        value: /etc/secrets/chave_firebase.json
+      - key: API_HOST
+        value: 0.0.0.0
+    secretFiles:
+      - source: chave_firebase.json
+        dest: /etc/secrets/chave_firebase.json
+  - type: worker
+    name: bot-telegram
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python telegram_bot.py
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: FIREBASE_CREDENTIALS
+        value: /etc/secrets/chave_firebase.json
+      - key: API_URL
+        sync: false
+    secretFiles:
+      - source: chave_firebase.json
+        dest: /etc/secrets/chave_firebase.json

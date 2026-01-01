@@ -26,10 +26,12 @@ def _load_dotenv():
 _load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-API_HOST = os.getenv("API_HOST", "127.0.0.1")
-API_PORT = int(os.getenv("API_PORT", "5000"))
+API_HOST = os.getenv("API_HOST") or os.getenv("HOST") or "0.0.0.0"
+API_PORT = int(os.getenv("API_PORT") or os.getenv("PORT") or "5000")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+API_URL_OVERRIDE = os.getenv("API_URL")
 
 def api_url():
+    if API_URL_OVERRIDE:
+        return API_URL_OVERRIDE
     return f"http://{API_HOST}:{API_PORT}"
-

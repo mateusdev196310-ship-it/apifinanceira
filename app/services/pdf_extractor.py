@@ -231,8 +231,11 @@ def _try_gemini_transacoes(texto: str) -> Optional[List[Dict]]:
         "Texto:\n" + texto[:20000]
     )
     try:
-        resp = cli.responses.generate(model="gemini-1.5-flash", input=prompt)
-        out = getattr(resp, "output_text", None) or ""
+        resposta = cli.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        out = (getattr(resposta, "text", "") or "").strip()
         if not out:
             return None
         j = None
@@ -300,8 +303,11 @@ def _try_gemini_totais(texto: str) -> Optional[Dict]:
         "Texto:\n" + texto[:20000]
     )
     try:
-        resp = cli.responses.generate(model="gemini-1.5-flash", input=prompt)
-        out = getattr(resp, "output_text", None) or ""
+        resposta = cli.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        out = (getattr(resposta, "text", "") or "").strip()
         if not out:
             return None
         j = None
