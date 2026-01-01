@@ -71,6 +71,21 @@ async def _req_json_cached_async(url, key, ttl=15, timeout=4):
     _cache_set(key, d, ttl)
     return d
 
+_BG_LIMIT = int(os.getenv("BOT_MAX_CONCURRENCY", "2") or "2")
+_bg_semaphore = asyncio.Semaphore(_BG_LIMIT if _BG_LIMIT > 0 else 1)
+async def _post_json_async(url, payload=None, timeout=10):
+    loop = asyncio.get_event_loop()
+    def _call():
+        try:
+            r = requests.post(url, json=payload, timeout=timeout)
+            try:
+                return r.json()
+            except:
+                return {}
+        except:
+            return {}
+    return await loop.run_in_executor(None, _call)
+
 async def mini_report(cliente_id: str, cliente_nome: str = None, username: str = None):
     try:
         dkey = datetime.now().strftime("%Y-%m-%d")
@@ -2445,7 +2460,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
     
     intent = _detectar_intencao(texto)
     if intent:
-        processing_msg = await update.message.reply_text("🔎 Analisando solicitação...")
+        processing_msg = await update.message.reply_text("✅ Recebi, estou processando...")
         try:
             if intent.get("tipo") == "debitos_mes":
                 mes = intent.get("mes")
@@ -2456,12 +2471,12 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                 valor = float(intent.get("valor", 0) or 0)
                 try:
                     url_s = f"{API_URL}/saldo/atual?mes={mes}&{build_cliente_query_params(update)}"
-                    data_s = requests.get(url_s, timeout=6).json()
+                    data_s = await _req_json_async(url_s, timeout=6)
                 except:
                     data_s = {"sucesso": False}
                 try:
                     url_c = f"{API_URL}/compromissos/mes?mes={mes}&{build_cliente_query_params(update)}"
-                    data_c = requests.get(url_c, timeout=6).json()
+                    data_c = await _req_json_async(url_c, timeout=6)
                 except:
                     data_c = {"sucesso": False}
                 saldo = 0.0
@@ -2551,17 +2566,18 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             except:
                 pass
             return
-    processing_msg = await update.message.reply_text("🔄 Processando transação...")
+    processing_msg = await update.message.reply_text("✅ Recebi, estou processando...")
     
     try:
+        await _bg_semaphore.acquire()
         rb_local = parse_text_to_transactions(texto) or []
         if rb_local:
             transacoes = rb_local
             arq = None
             try:
                 cid = str(update.effective_chat.id)
-                ensure_cliente(cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                salvar_transacao_cliente(transacoes, cliente_id=cid, origem="bot")
+                await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
+                await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
             except:
                 arq = None
             try:
@@ -2580,7 +2596,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                 precisa_ai = any(_desc_confusa(str(it.get('descricao', ''))) for it in transacoes)
                 if precisa_ai:
                     from app.services.extractor import extrair_informacoes_financeiras
-                    ai_trans = extrair_informacoes_financeiras(texto) or []
+                    ai_trans = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
                     transacoes = (transacoes or []) + ai_trans
             except:
                 pass
@@ -2588,7 +2604,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             transacoes = []
             data = None
             from app.services.finance_api import processar_mensagem
-            data = processar_mensagem(texto, timeout=4, cliente_id=str(update.effective_chat.id))
+            data = await asyncio.to_thread(processar_mensagem, texto, timeout=4, cliente_id=str(update.effective_chat.id))
             if data and data.get("sucesso"):
                 transacoes_api = data.get("transacoes", [])
                 transacoes = transacoes_api if transacoes_api else []
@@ -2596,14 +2612,14 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             else:
                 try:
                     from app.services.extractor import extrair_informacoes_financeiras
-                    transacoes = extrair_informacoes_financeiras(texto) or []
+                    transacoes = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
                 except:
                     transacoes = []
                 arq = None
                 try:
                     cid = str(update.effective_chat.id)
-                    ensure_cliente(cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                    salvar_transacao_cliente(transacoes, cliente_id=cid, origem="bot")
+                    await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
+                    await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
                 except:
                     arq = None
         dedup = {}
@@ -2627,7 +2643,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
         if not transacoes:
             try:
                 from app.services.finance_api import processar_mensagem
-                data2 = processar_mensagem(texto, timeout=5, cliente_id=str(update.effective_chat.id))
+                data2 = await asyncio.to_thread(processar_mensagem, texto, timeout=5, cliente_id=str(update.effective_chat.id))
             except:
                 data2 = {"sucesso": False}
             if data2 and data2.get("sucesso"):
@@ -2648,6 +2664,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                     parse_mode='Markdown',
                     reply_markup=kb
                 )
+                _bg_semaphore.release()
             except:
                 pass
             return
@@ -2684,7 +2701,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             resposta += f"   Categoria: {cat_nome}\n\n"
         try:
             cid = str(update.effective_chat.id)
-            extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4).json()
+            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
             if extrato.get("sucesso"):
                 tot = extrato.get("total", {})
                 resposta += "💰 *TOTAIS DO DIA*\n"
@@ -2717,7 +2734,12 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        _bg_semaphore.release()
     except:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
@@ -2803,8 +2825,9 @@ if __name__ == '__main__':
     main()
 async def processar_mensagem_imagem(update: Update, context: CallbackContext):
     msg = update.message
-    processing_msg = await msg.reply_text("🔄 Processando imagem...")
+    processing_msg = await msg.reply_text("✅ Recebi, estou processando imagem...")
     try:
+        await _bg_semaphore.acquire()
         if not msg.photo:
             await context.bot.edit_message_text(
                 chat_id=processing_msg.chat_id,
@@ -2812,6 +2835,7 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
                 text="⚠️ Nenhuma foto recebida.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         foto = msg.photo[-1]
         arquivo = await context.bot.get_file(foto.file_id)
@@ -2834,8 +2858,9 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
                 text="⚠️ Erro ao baixar a imagem.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
-        transacoes = extrair_informacoes_da_imagem(image_bytes) or []
+        transacoes = await asyncio.to_thread(extrair_informacoes_da_imagem, image_bytes) or []
         if not transacoes:
             await context.bot.edit_message_text(
                 chat_id=processing_msg.chat_id,
@@ -2843,11 +2868,12 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
                 text="Não consegui identificar os dados financeiros nesta imagem. Verifique se o valor está visível",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         try:
-            resp = requests.post(
+            data = await _post_json_async(
                 f"{API_URL}/processar",
-                json={
+                {
                     "transacoes": transacoes,
                     "texto_original": "imagem:telegram",
                     "cliente_id": str(update.effective_chat.id),
@@ -2856,7 +2882,6 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
                 },
                 timeout=10
             )
-            data = resp.json() if resp.ok else {"sucesso": False}
         except:
             data = {"sucesso": False}
         if data.get("sucesso"):
@@ -2895,7 +2920,7 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
         try:
-            extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4).json()
+            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
             if extrato.get("sucesso"):
                 tot = extrato.get("total", {})
                 resposta += "💰 *TOTAIS DO DIA*\n"
@@ -2926,7 +2951,12 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        _bg_semaphore.release()
     except:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
@@ -2937,6 +2967,7 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
     msg = update.message
     processing_msg = await msg.reply_text("🔄 Processando documento de imagem...")
     try:
+        await _bg_semaphore.acquire()
         doc = msg.document
         if not doc:
             await context.bot.edit_message_text(
@@ -2945,6 +2976,7 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 text="⚠️ Documento ausente.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         if str(doc.mime_type or "").lower().startswith("application/pdf"):
             await context.bot.edit_message_text(
@@ -2966,14 +2998,14 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                     await arquivo.download_to_drive(local_path)
                 except:
                     url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{arquivo.file_path}"
-                    r = requests.get(url, timeout=30)
-                    if r.status_code == 200:
+                    r = await asyncio.to_thread(requests.get, url, timeout=30)
+                    if getattr(r, "status_code", 0) == 200:
                         with open(local_path, "wb") as f:
                             f.write(r.content)
                 try:
-                    resp = requests.post(
+                    data = await _post_json_async(
                         f"{API_URL}/processar_pdf_totais",
-                        json={
+                        {
                             "arquivo": local_path,
                             "cliente_id": str(update.effective_chat.id),
                             "cliente_nome": get_cliente_nome(update),
@@ -2981,17 +3013,14 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                         },
                         timeout=30
                     )
-                    try:
-                        data = resp.json()
-                    except:
-                        data = {"sucesso": False}
                 except:
                     data = {"sucesso": False}
                 transacoes = data.get("transacoes", []) if data.get("sucesso") else []
                 if not transacoes:
                     try:
                         from app.services.pdf_extractor import extrair_totais_a_pagar_de_pdf
-                        tot = extrair_totais_a_pagar_de_pdf(path=local_path) or {}
+                        tot = await asyncio.to_thread(extrair_totais_a_pagar_de_pdf, None, path=local_path)
+                        tot = tot or {}
                         transacoes = []
                         if isinstance(tot.get("total_a_pagar"), (int, float)):
                             transacoes.append({
@@ -3026,6 +3055,7 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                             os.remove(local_path)
                     except:
                         pass
+                    _bg_semaphore.release()
                     return
                 tot = data.get("totais") if data.get("sucesso") else None
                 resposta = criar_cabecalho("FATURA (TOTAIS EXTRAÍDOS)", 40)
@@ -3062,7 +3092,7 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 if isinstance(data, dict) and data.get("erro_salvar"):
                     resposta += "⚠️ Não consegui salvar no Firestore.\n\n"
                 try:
-                    extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=5).json()
+                    extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=5)
                     if extrato.get("sucesso"):
                         tot = extrato.get("total", {})
                         resposta += "💰 *TOTAIS DO DIA*\n"
@@ -3093,8 +3123,13 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                     parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
+                _bg_semaphore.release()
                 return
             except:
+                try:
+                    _bg_semaphore.release()
+                except:
+                    pass
                 await context.bot.edit_message_text(
                     chat_id=processing_msg.chat_id,
                     message_id=processing_msg.message_id,
@@ -3109,6 +3144,7 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 text="⚠️ Documento não é uma imagem suportada.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         arquivo = await context.bot.get_file(doc.file_id)
         image_bytes = b""
@@ -3118,8 +3154,8 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
         except:
             try:
                 url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{arquivo.file_path}"
-                r = requests.get(url, timeout=20)
-                if r.status_code == 200:
+                r = await asyncio.to_thread(requests.get, url, timeout=20)
+                if getattr(r, "status_code", 0) == 200:
                     image_bytes = bytes(r.content)
             except:
                 image_bytes = b""
@@ -3130,8 +3166,9 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 text="⚠️ Erro ao baixar a imagem do documento.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
-        transacoes = extrair_informacoes_da_imagem(image_bytes) or []
+        transacoes = await asyncio.to_thread(extrair_informacoes_da_imagem, image_bytes) or []
         if not transacoes:
             await context.bot.edit_message_text(
                 chat_id=processing_msg.chat_id,
@@ -3139,11 +3176,12 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 text="Não consegui identificar os dados financeiros nesta imagem. Verifique se o valor está visível",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         try:
-            resp = requests.post(
+            data = await _post_json_async(
                 f"{API_URL}/processar",
-                json={
+                {
                     "transacoes": transacoes,
                     "texto_original": "documento:telegram",
                     "cliente_id": str(update.effective_chat.id),
@@ -3152,7 +3190,6 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 },
                 timeout=10
             )
-            data = resp.json() if resp.ok else {"sucesso": False}
         except:
             data = {"sucesso": False}
         if data.get("sucesso"):
@@ -3222,7 +3259,12 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        _bg_semaphore.release()
     except:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
@@ -3233,6 +3275,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
     msg = update.message
     processing_msg = await msg.reply_text("🔄 Processando áudio (voz)...")
     try:
+        await _bg_semaphore.acquire()
         v = msg.voice
         if not v:
             await context.bot.edit_message_text(
@@ -3241,6 +3284,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                 text="⚠️ Nenhuma mensagem de voz recebida.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         arquivo = await context.bot.get_file(v.file_id)
         audio_bytes = b""
@@ -3250,8 +3294,8 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
         except:
             try:
                 url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{arquivo.file_path}"
-                r = requests.get(url, timeout=20)
-                if r.status_code == 200:
+                r = await asyncio.to_thread(requests.get, url, timeout=20)
+                if getattr(r, "status_code", 0) == 200:
                     audio_bytes = bytes(r.content)
             except:
                 audio_bytes = b""
@@ -3262,9 +3306,10 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                 text="⚠️ Erro ao baixar o áudio.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         from audio_processor import audio_processor
-        texto = audio_processor.transcribe_audio_file(audio_bytes, format='ogg')
+        texto = await asyncio.to_thread(audio_processor.transcribe_audio_file, audio_bytes, format='ogg')
         if not texto:
             await context.bot.edit_message_text(
                 chat_id=processing_msg.chat_id,
@@ -3272,16 +3317,18 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                 text="Não consegui transcrever o áudio de voz. Envie como ÁUDIO (MP3/WAV) ou tente novamente.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         if re.search(r'\bestornar\b', texto, re.IGNORECASE):
             v, dr, tipo = extrair_campos_estorno(texto)
             if v and dr:
                 await iniciar_fluxo_estorno_por_valor(update, context, v, dr, tipo=tipo, processamento=processing_msg)
+                _bg_semaphore.release()
                 return
         try:
-            resp = requests.post(
+            data = await _post_json_async(
                 f"{API_URL}/processar",
-                json={
+                {
                     "mensagem": texto,
                     "cliente_id": str(update.effective_chat.id),
                     "cliente_nome": get_cliente_nome(update),
@@ -3289,7 +3336,6 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                 },
                 timeout=10
             )
-            data = resp.json() if resp.ok else {"sucesso": False}
         except:
             data = {"sucesso": False}
         transacoes = []
@@ -3301,14 +3347,14 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             transacoes = parse_text_to_transactions(texto)
             try:
                 cid = str(update.effective_chat.id)
-                ensure_cliente(cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                salvar_transacao_cliente(transacoes, cliente_id=cid, origem="bot-audio")
+                await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
+                await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
             except:
                 arq = None
         if not transacoes:
             try:
                 from app.services.extractor import extrair_informacoes_financeiras
-                transacoes = extrair_informacoes_financeiras(texto) or []
+                transacoes = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
             except:
                 transacoes = []
         if transacoes:
@@ -3376,7 +3422,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
         try:
-            extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4).json()
+            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
             if extrato.get("sucesso"):
                 tot = extrato.get("total", {})
                 resposta += "💰 *TOTAIS DO DIA*\n"
@@ -3407,7 +3453,12 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        _bg_semaphore.release()
     except:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
@@ -3418,6 +3469,7 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
     msg = update.message
     processing_msg = await msg.reply_text("🔄 Processando áudio...")
     try:
+        await _bg_semaphore.acquire()
         a = msg.audio
         if not a:
             await context.bot.edit_message_text(
@@ -3426,6 +3478,7 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                 text="⚠️ Nenhum áudio recebido.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         arquivo = await context.bot.get_file(a.file_id)
         audio_bytes = b""
@@ -3435,8 +3488,8 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
         except:
             try:
                 url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{arquivo.file_path}"
-                r = requests.get(url, timeout=20)
-                if r.status_code == 200:
+                r = await asyncio.to_thread(requests.get, url, timeout=20)
+                if getattr(r, "status_code", 0) == 200:
                     audio_bytes = bytes(r.content)
             except:
                 audio_bytes = b""
@@ -3447,10 +3500,11 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                 text="⚠️ Erro ao baixar o áudio.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         fmt = 'mp3' if str(a.mime_type or '').endswith('mpeg') or str(a.file_name or '').lower().endswith('.mp3') else 'ogg'
         from audio_processor import audio_processor
-        texto = audio_processor.transcribe_audio_file(audio_bytes, format=fmt)
+        texto = await asyncio.to_thread(audio_processor.transcribe_audio_file, audio_bytes, format=fmt)
         if not texto:
             await context.bot.edit_message_text(
                 chat_id=processing_msg.chat_id,
@@ -3458,16 +3512,18 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                 text="Não consegui transcrever o áudio.",
                 parse_mode='Markdown'
             )
+            _bg_semaphore.release()
             return
         if re.search(r'\bestornar\b', texto, re.IGNORECASE):
             v, dr, tipo = extrair_campos_estorno(texto)
             if v and dr:
                 await iniciar_fluxo_estorno_por_valor(update, context, v, dr, tipo=tipo, processamento=processing_msg)
+                _bg_semaphore.release()
                 return
         try:
-            resp = requests.post(
+            data = await _post_json_async(
                 f"{API_URL}/processar",
-                json={
+                {
                     "mensagem": texto,
                     "cliente_id": str(update.effective_chat.id),
                     "cliente_nome": get_cliente_nome(update),
@@ -3475,7 +3531,6 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                 },
                 timeout=10
             )
-            data = resp.json() if resp.ok else {"sucesso": False}
         except:
             data = {"sucesso": False}
         transacoes = []
@@ -3487,14 +3542,14 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             transacoes = parse_text_to_transactions(texto)
             try:
                 cid = str(update.effective_chat.id)
-                ensure_cliente(cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                salvar_transacao_cliente(transacoes, cliente_id=cid, origem="bot-audio")
+                await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
+                await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
             except:
                 arq = None
         if not transacoes:
             try:
                 from app.services.extractor import extrair_informacoes_financeiras
-                transacoes = extrair_informacoes_financeiras(texto) or []
+                transacoes = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
             except:
                 transacoes = []
         if transacoes:
@@ -3562,7 +3617,7 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
         try:
-            extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4).json()
+            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
             if extrato.get("sucesso"):
                 tot = extrato.get("total", {})
                 resposta += "💰 *TOTAIS DO DIA*\n"
@@ -3593,7 +3648,12 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        _bg_semaphore.release()
     except:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
