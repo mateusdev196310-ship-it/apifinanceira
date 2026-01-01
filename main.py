@@ -86,7 +86,10 @@ def _ensure_month_consistency(cliente_id: str, mes_atual: str):
 def _consistency_monitor(interval_seconds: int = 300, recent_hours: int = 8):
     if get_db is None:
         return
-    db = get_db()
+    try:
+        db = get_db()
+    except Exception:
+        return
     while True:
         try:
             now = datetime.now()

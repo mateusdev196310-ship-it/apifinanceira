@@ -117,9 +117,13 @@ def processar():
                 ensure_cliente(cliente_id, nome=str(data.get("cliente_nome") or None), username=str(data.get("username") or None))
             except:
                 pass
-            salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+            erro_salvar = None
+            try:
+                salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+            except Exception:
+                erro_salvar = "Falha ao salvar no Firestore"
         except Exception as e:
-            return jsonify({"sucesso": False, "erro": "Falha ao salvar no Firestore"}), 500
+            erro_salvar = "Falha ao salvar no Firestore"
         try:
             SOURCE_STATS["json-transacoes"] = SOURCE_STATS.get("json-transacoes", 0) + 1
             total_stats = sum(SOURCE_STATS.values())
@@ -135,7 +139,8 @@ def processar():
             "debug": {
                 "source": "json-transacoes",
                 "version": "image-doc-v1"
-            }
+            },
+            "erro_salvar": erro_salvar
         })
     if 'mensagem' not in data:
         return jsonify({"sucesso": False, "erro": "Mensagem não fornecida"}), 400
@@ -190,6 +195,7 @@ def processar():
     if not transacoes:
         return jsonify({"sucesso": False, "erro": "Nenhuma transação encontrada"}), 200
     
+    erro_salvar = None
     try:
         cliente_id = str(data.get("cliente_id") or "default")
         origem = str(data.get("origem") or "api")
@@ -197,9 +203,12 @@ def processar():
             ensure_cliente(cliente_id, nome=str(data.get("cliente_nome") or None), username=str(data.get("username") or None))
         except:
             pass
-        salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
-    except Exception as e:
-        return jsonify({"sucesso": False, "erro": "Falha ao salvar no Firestore"}), 500
+        try:
+            salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+        except Exception:
+            erro_salvar = "Falha ao salvar no Firestore"
+    except Exception:
+        erro_salvar = "Falha ao salvar no Firestore"
     normalized = []
     for item in transacoes:
         tipo_n = str(item.get('tipo')).strip()
@@ -232,7 +241,8 @@ def processar():
             "ai_count": orig_count,
             "rb_count": len(rb or []),
             "version": "ai+rule-v1"
-        }
+        },
+        "erro_salvar": erro_salvar
     })
 
 @app.route('/processar_audio', methods=['POST'])
@@ -284,6 +294,7 @@ def processar_audio():
         print(f"[processar_audio] fonte=local-regra qtd={len(transacoes)} stats={SOURCE_STATS} total={total_stats}")
     except:
         pass
+    erro_salvar = None
     try:
         cliente_id = str(data.get("cliente_id") or "default")
         origem = f"audio-file:{os.path.basename(arquivo)}"
@@ -291,19 +302,23 @@ def processar_audio():
             ensure_cliente(cliente_id, nome=str(data.get("cliente_nome") or None), username=str(data.get("username") or None))
         except:
             pass
-        salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
-    except Exception as e:
-        return jsonify({"sucesso": False, "erro": "Falha ao salvar no Firestore"}), 500
-        return jsonify({"sucesso": True,
-            "transacoes": transacoes,
-            "total": len(transacoes),
-            "arquivo": None,
-            "processado_em": datetime.now().isoformat(),
-            "debug": {
-                "source": "audio-file",
-                "texto": texto[:120]
-            }
-        })
+        try:
+            salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+        except Exception:
+            erro_salvar = "Falha ao salvar no Firestore"
+    except Exception:
+        erro_salvar = "Falha ao salvar no Firestore"
+    return jsonify({"sucesso": True,
+        "transacoes": transacoes,
+        "total": len(transacoes),
+        "arquivo": None,
+        "processado_em": datetime.now().isoformat(),
+        "debug": {
+            "source": "audio-file",
+            "texto": texto[:120]
+        },
+        "erro_salvar": erro_salvar
+    })
 @app.route('/processar_pdf', methods=['POST'])
 def processar_pdf():
     data = request.json
