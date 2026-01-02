@@ -356,6 +356,18 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
             inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
         batch.set(dref, inc_d, merge=True)
         batch.set(mref, inc_m, merge=True)
+        try:
+            delta = 0.0
+            if tp_txt == "entrada":
+                delta = float(val or 0)
+            elif tp_txt == "saida":
+                delta = -float(val or 0)
+            elif tp_txt == "ajuste":
+                delta = float(val or 0)
+            if abs(delta) > 0:
+                batch.set(root, {"saldo_real": firestore.Increment(delta), "atualizado_em": firestore.SERVER_TIMESTAMP}, merge=True)
+        except:
+            pass
         out.append(doc)
     batch.commit()
     return out
@@ -459,6 +471,16 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
         })
     batch.set(dref, inc_d, merge=True)
     batch.set(mref, inc_m, merge=True)
+    try:
+        delta = 0.0
+        if tp == "entrada":
+            delta = -float(val or 0)
+        else:
+            delta = float(val or 0)
+        if abs(delta) > 0:
+            batch.set(root, {"saldo_real": firestore.Increment(delta), "atualizado_em": firestore.SERVER_TIMESTAMP}, merge=True)
+    except:
+        pass
     batch.commit()
     return payload
 def backup_firestore_data(output_path=None):

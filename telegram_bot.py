@@ -101,7 +101,7 @@ async def mini_report(cliente_id: str, cliente_nome: str = None, username: str =
             qs += f"&username={quote_plus(str(username))}"
         day_url = f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}"
         month_url = f"{API_URL}/saldo/atual?mes={mkey}&{qs}"
-        geral_url = f"{API_URL}/total/geral?{qs}"
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
         day_api, month_api, geral_api = await asyncio.gather(
             _req_json_cached_async(day_url, f"day:{cliente_id}:{dkey}", ttl=10, timeout=4),
             _req_json_cached_async(month_url, f"month:{cliente_id}:{mkey}", ttl=15, timeout=4),
@@ -125,7 +125,7 @@ async def mini_report(cliente_id: str, cliente_nome: str = None, username: str =
                 saldo_mes = float(m_tot.get("saldo", receitas_mes - despesas_mes) or (receitas_mes - despesas_mes))
             except:
                 pass
-        saldo_final = float(((geral_api or {}).get("total") or {}).get("saldo", 0) or 0)
+        saldo_final = float(((geral_api or {}).get("total") or {}).get("saldo_real", ((geral_api or {}).get("total") or {}).get("saldo", 0)) or 0)
         titulo = criar_cabecalho("LEMBRETE DIÁRIO", 40) + "\n\n"
         titulo += "📝 Registre todas as suas transações\n\n"
         titulo += "📊 MINI RELATÓRIO\n"
@@ -204,7 +204,7 @@ def mini_report_sync(cliente_id: str, cliente_nome: str = None, username: str = 
             qs += f"&username={quote_plus(str(username))}"
         day_url = f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}"
         month_url = f"{API_URL}/saldo/atual?mes={mkey}&{qs}"
-        geral_url = f"{API_URL}/total/geral?{qs}"
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
         day_api = _req_json_cached(day_url, f"day:{cliente_id}:{dkey}", ttl=10, timeout=4)
         month_api = _req_json_cached(month_url, f"month:{cliente_id}:{mkey}", ttl=15, timeout=4)
         geral_api = _req_json_cached(geral_url, f"geral:{cliente_id}", ttl=20, timeout=4)
@@ -226,7 +226,7 @@ def mini_report_sync(cliente_id: str, cliente_nome: str = None, username: str = 
                 saldo_mes = float(m_tot.get("saldo", receitas_mes - despesas_mes) or (receitas_mes - despesas_mes))
             except:
                 pass
-        saldo_final = float(((geral_api or {}).get("total") or {}).get("saldo", 0) or 0)
+        saldo_final = float(((geral_api or {}).get("total") or {}).get("saldo_real", ((geral_api or {}).get("total") or {}).get("saldo", 0)) or 0)
         titulo = criar_cabecalho("LEMBRETE DIÁRIO", 40) + "\n\n"
         titulo += "📝 Registre todas as suas transações\n\n"
         titulo += "📊 MINI RELATÓRIO\n"
@@ -289,11 +289,12 @@ def _scheduler_thread(interval_seconds: int = 60):
                 uname = str(o.get("cliente_username") or "")
                 saldo = 0.0
                 try:
-                    url_s = f"{API_URL}/total/geral?cliente_id={cid}"
+                    url_s = f"{API_URL}/saldo/atual?cliente_id={cid}"
                     r = requests.get(url_s, timeout=6)
                     j = r.json()
                     if j.get("sucesso"):
-                        saldo = float(j.get("total", {}).get("saldo", 0) or 0)
+                        tot = j.get("total", {}) or {}
+                        saldo = float(tot.get("saldo_real", tot.get("saldo", 0)) or 0)
                 except:
                     saldo = 0.0
                 try:
@@ -315,12 +316,13 @@ def _scheduler_thread(interval_seconds: int = 60):
 
 def obter_saldo_geral(cliente_id=None):
     try:
-        url = f"{API_URL}/total/geral"
+        url = f"{API_URL}/saldo/atual"
         if cliente_id:
             url += f"?cliente_id={cliente_id}"
         resp = requests.get(url, timeout=4).json()
         if resp.get("sucesso"):
-            return float(resp.get("total", {}).get("saldo", 0) or 0)
+            tot = resp.get("total", {}) or {}
+            return float(tot.get("saldo_real", tot.get("saldo", 0)) or 0)
     except:
         return 0.0
 def calcular_estatisticas(transacoes, periodo="DIA"):
@@ -1872,13 +1874,70 @@ async def relatorio_categorias(query, context):
     )
 
 async def extrato_detalhado(query, context):
-    """Extrato detalhado."""
-    await query.edit_message_text(
-        "📋 *EXTRATO DETALHADO*\n\n"
-        "Esta funcionalidade está em desenvolvimento.\n\n"
-        "💡 Use \"/resumo\" para um resumo completo.",
-        parse_mode='Markdown'
-    )
+    try:
+        cid = get_cliente_id(query)
+        qs = build_cliente_query_params(query)
+        mk = datetime.now().strftime("%Y-%m")
+        url_dia = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
+        url_mes = f"{API_URL}/saldo/atual?mes={mk}&{qs}"
+        url_geral = f"{API_URL}/saldo/atual?{qs}"
+        try:
+            day_api = requests.get(url_dia, timeout=6).json()
+        except:
+            day_api = {"sucesso": False}
+        try:
+            mes_api = requests.get(url_mes, timeout=6).json()
+        except:
+            mes_api = {"sucesso": False}
+        try:
+            geral_api = requests.get(url_geral, timeout=6).json()
+        except:
+            geral_api = {"sucesso": False}
+        d_tot = (day_api or {}).get("total") or {}
+        m_tot = (mes_api or {}).get("total") or {}
+        g_tot = (geral_api or {}).get("total") or {}
+        receitas_dia = float(d_tot.get("receitas", 0) or 0)
+        despesas_dia = float(d_tot.get("despesas", 0) or 0)
+        saldo_dia = float(d_tot.get("saldo", receitas_dia - despesas_dia) or (receitas_dia - despesas_dia))
+        receitas_mes = float(m_tot.get("receitas", 0) or 0)
+        despesas_mes = float(m_tot.get("despesas", 0) or 0)
+        saldo_mes = float(m_tot.get("saldo", receitas_mes - despesas_mes) or (receitas_mes - despesas_mes))
+        saldo_real = float(g_tot.get("saldo_real", g_tot.get("saldo", 0)) or 0)
+        titulo = criar_cabecalho("EXTRATO DETALHADO", 40) + "\n\n"
+        largura = 32
+        caixa_dia = ""
+        caixa_dia += "+" + ("-" * largura) + "+\n"
+        caixa_dia += f"|{criar_linha_tabela('HOJE', '', False, '', largura=largura)}|\n"
+        caixa_dia += "+" + ("-" * largura) + "+\n"
+        caixa_dia += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(receitas_dia, negrito=False), True, '', largura=largura)}|\n"
+        caixa_dia += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(despesas_dia, negrito=False), True, '', largura=largura)}|\n"
+        caixa_dia += f"|{criar_linha_tabela('SALDO:', formatar_moeda(saldo_dia, negrito=False), True, '', largura=largura)}|\n"
+        caixa_dia += "+" + ("-" * largura) + "+\n"
+        caixa_mes = ""
+        caixa_mes += "+" + ("-" * largura) + "+\n"
+        caixa_mes += f"|{criar_linha_tabela('ESTE MÊS', '', False, '', largura=largura)}|\n"
+        caixa_mes += "+" + ("-" * largura) + "+\n"
+        caixa_mes += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(receitas_mes, negrito=False), True, '', largura=largura)}|\n"
+        caixa_mes += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(despesas_mes, negrito=False), True, '', largura=largura)}|\n"
+        caixa_mes += f"|{criar_linha_tabela('SALDO:', formatar_moeda(saldo_mes, negrito=False), True, '', largura=largura)}|\n"
+        caixa_mes += "+" + ("-" * largura) + "+\n"
+        bloco = wrap_code_block(caixa_dia) + "\n" + wrap_code_block(caixa_mes)
+        lista_tx = []
+        try:
+            for t in (day_api.get("matches") or [])[:10]:
+                tp = str(t.get('tipo', '')).strip().lower()
+                emoji = "🔴" if tp in ('0', 'saida', 'despesa') else ("🟢" if tp in ('1', 'entrada', 'receita') else "⚙️")
+                v = float(t.get('valor', 0) or 0)
+                desc = str(t.get('descricao', '') or '')
+                lista_tx.append(f"{emoji} {formatar_moeda(v)} — `{md_escape(desc)}`")
+        except:
+            lista_tx = []
+        linhas = "\n".join(lista_tx) if lista_tx else "📭 Nenhuma transação hoje"
+        rodape = f"\n💹 Saldo atual real: {formatar_moeda(saldo_real, negrito=True)}\n\n"
+        texto = titulo + bloco + wrap_code_block(linhas) + rodape
+        await query.edit_message_text(texto, parse_mode='Markdown')
+    except:
+        await query.edit_message_text("⚠️ Erro ao carregar extrato.", parse_mode='Markdown')
 
 # ===== HANDLERS DE COMANDOS =====
 async def comando_total(update: Update, context: CallbackContext) -> None:

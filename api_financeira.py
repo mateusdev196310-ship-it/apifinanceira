@@ -1822,6 +1822,11 @@ def saldo_atual():
                     total_receitas += float(mm.get("total_entrada", 0) or 0)
                     total_ajustes += float(mm.get("total_ajuste", 0) or 0)
                     total_estornos += float(mm.get("total_estorno", 0) or 0)
+                try:
+                    base_root = root.get().to_dict() or {}
+                    saldo_real = float(base_root.get("saldo_real")) if base_root.get("saldo_real") is not None else None
+                except:
+                    saldo_real = None
             saldo = total_receitas - total_despesas + total_ajustes
             if mes:
                 try:
@@ -1831,7 +1836,8 @@ def saldo_atual():
             if dt_ini and dt_fim and saldo_real is None:
                 saldo_real = saldo
             if not mes and not dt_ini and not dt_fim:
-                saldo_real = saldo
+                if saldo_real is None:
+                    saldo_real = saldo
             return jsonify({
                 "sucesso": True,
                 "filtros": {
