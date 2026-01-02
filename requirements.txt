@@ -14,3 +14,4 @@ imageio-ffmpeg==0.5.1
 python-telegram-bot==21.7
 google-genai==1.40.0
 gunicorn==23.0.0
+vosk==0.3.45
