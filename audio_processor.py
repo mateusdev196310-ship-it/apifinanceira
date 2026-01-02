@@ -143,7 +143,12 @@ class AudioProcessor:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as in_file:
                         in_file.write(audio_bytes)
                         in_path = in_file.name
-                    out_path = in_path.replace(f'.{format}', '.wav')
+                    try:
+                        import os as _os
+                        base, _ext = _os.path.splitext(in_path)
+                        out_path = base + '.wav'
+                    except:
+                        out_path = in_path + '.wav'
                     try:
                         subprocess.run([ff, '-y', '-i', in_path, '-ar', '16000', '-ac', '1', out_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         if self.recognizer is not None:
