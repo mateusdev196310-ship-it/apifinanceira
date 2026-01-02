@@ -177,6 +177,30 @@ class AudioProcessor:
                                         texto = None
                                 if texto:
                                     return texto
+                        # segunda tentativa: converter para 8000 Hz
+                        out_path2 = out_path.replace('.wav', '.8k.wav')
+                        try:
+                            subprocess.run([ff, '-y', '-i', in_path, '-ar', '8000', '-ac', '1', out_path2], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            if self.recognizer is not None:
+                                with sr.AudioFile(out_path2) as source2:
+                                    self.recognizer.adjust_for_ambient_noise(source2, duration=0.2)
+                                    audio_data2 = self.recognizer.record(source2)
+                                    texto2 = None
+                                    try:
+                                        texto2 = self.recognizer.recognize_google(audio_data2, language='pt-BR', show_all=False)
+                                    except:
+                                        texto2 = None
+                                    if not texto2:
+                                        try:
+                                            with sr.AudioFile(out_path2) as s3:
+                                                a3 = self.recognizer.record(s3)
+                                                texto2 = self.recognizer.recognize_google(a3, language='pt-BR', show_all=False)
+                                        except:
+                                            texto2 = None
+                                    if texto2:
+                                        return texto2
+                        except:
+                            pass
                     except:
                         pass
                     finally:
@@ -185,6 +209,9 @@ class AudioProcessor:
                                 os.remove(in_path)
                             if os.path.exists(out_path):
                                 os.remove(out_path)
+                            out2 = out_path.replace('.wav', '.8k.wav')
+                            if os.path.exists(out2):
+                                os.remove(out2)
                         except:
                             pass
                 if format in ('ogg', 'oga', 'opus'):
