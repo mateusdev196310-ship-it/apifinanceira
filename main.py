@@ -132,7 +132,7 @@ def run_bot():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--service", choices=["api", "bot", "both"], default="both")
+    parser.add_argument("--service", choices=["api", "bot", "both"], default="api")
     parser.add_argument("--migrar_todos", action="store_true", help="Migrar transações para todos os clientes")
     parser.add_argument("--cliente_id", type=str, help="Migrar/Recomputar apenas este cliente")
     parser.add_argument("--delete_original", action="store_true", help="Apagar documentos antigos após migrar")
