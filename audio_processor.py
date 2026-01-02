@@ -190,10 +190,6 @@ class AudioProcessor:
     def transcribe_audio_file(self, audio_bytes, format='ogg'):
         try:
             if format == 'wav':
-                if self.recognizer is None:
-                    mime = 'audio/wav'
-                    t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
-                    return t_ai if t_ai else None
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                     tmp_file.write(audio_bytes)
                     temp_path = tmp_file.name
@@ -216,6 +212,9 @@ class AudioProcessor:
                                 texto = None
                         if texto:
                             return texto
+                    t_v = self._transcribe_vosk_file(temp_path)
+                    if t_v:
+                        return t_v
                 except:
                     pass
                 finally:
@@ -223,11 +222,8 @@ class AudioProcessor:
                         os.remove(temp_path)
                     except:
                         pass
-                mime = 'audio/wav'
-                t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
-                if t_ai:
-                    return t_ai
-                return None
+                t_ai = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
+                return t_ai if t_ai else None
             if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg', 'm4a', 'aac'):
                 try:
                     from imageio_ffmpeg import get_ffmpeg_exe
@@ -265,10 +261,9 @@ class AudioProcessor:
                                         texto = None
                                 if texto:
                                     return texto
-                        if not self.recognizer:
-                            t_v = self._transcribe_vosk_file(out_path)
-                            if t_v:
-                                return t_v
+                        t_v = self._transcribe_vosk_file(out_path)
+                        if t_v:
+                            return t_v
                         # segunda tentativa: converter para 8000 Hz
                         out_path2 = out_path.replace('.wav', '.8k.wav')
                         try:
@@ -291,10 +286,9 @@ class AudioProcessor:
                                             texto2 = None
                                     if texto2:
                                         return texto2
-                            if not self.recognizer:
-                                t_v2 = self._transcribe_vosk_file(out_path2)
-                                if t_v2:
-                                    return t_v2
+                            t_v2 = self._transcribe_vosk_file(out_path2)
+                            if t_v2:
+                                return t_v2
                         except:
                             pass
                     except:
@@ -320,20 +314,6 @@ class AudioProcessor:
                     mime = 'audio/aac'
                 else:
                     mime = 'audio/mpeg'
-                if self._ensure_vosk():
-                    try:
-                        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmpw:
-                            tmpw.write(audio_bytes)
-                            p = tmpw.name
-                        t_vb = self._transcribe_vosk_file(p)
-                        try:
-                            os.remove(p)
-                        except Exception:
-                            pass
-                        if t_vb:
-                            return t_vb
-                    except Exception:
-                        pass
                 t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
                 if t_ai:
                     return t_ai
