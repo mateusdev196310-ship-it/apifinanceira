@@ -26,6 +26,8 @@ services:
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: BOT_MAX_CONCURRENCY
+        value: 2
       - key: FIREBASE_CREDENTIALS
         sync: false
       - key: API_URL
