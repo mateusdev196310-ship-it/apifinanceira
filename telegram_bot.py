@@ -25,6 +25,10 @@ from app.services.rule_based import parse_text_to_transactions, clean_desc, natu
 from app.services.image_extractor import extrair_informacoes_da_imagem
 from app.services.database import salvar_transacao_cliente, ensure_cliente, get_db, firestore
 from time import time as _now_ts
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -261,11 +265,17 @@ def _scheduler_thread(interval_seconds: int = 60):
     while True:
         try:
             import datetime as _dt, time as _t
-            now = _dt.datetime.now()
-            target = now.replace(hour=8, minute=0, second=0, microsecond=0)
-            if now >= target:
-                target = target + _dt.timedelta(days=1)
-            wait_s = max(1, int((target - now).total_seconds()))
+            now_utc = _dt.datetime.now(_dt.timezone.utc)
+            tz = None
+            try:
+                tz = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
+            except Exception:
+                tz = None
+            now_local = now_utc.astimezone(tz) if tz is not None else (now_utc + _dt.timedelta(hours=-3))
+            target_local = now_local.replace(hour=8, minute=0, second=0, microsecond=0)
+            if now_local >= target_local:
+                target_local = target_local + _dt.timedelta(days=1)
+            wait_s = max(1, int((target_local - now_local).total_seconds()))
             _t.sleep(wait_s)
             clientes = []
             try:
