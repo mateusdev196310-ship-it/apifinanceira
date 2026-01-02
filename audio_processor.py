@@ -10,14 +10,6 @@ from google.genai import types
 import time
 import subprocess
 import shutil
-try:
-    import vosk as _vosk
-except Exception:
-    _vosk = None
-import json
-import zipfile
-import io
-import requests
 
 class AudioProcessor:
     """Processa áudio do Telegram para texto."""
@@ -27,87 +19,6 @@ class AudioProcessor:
             self.recognizer = sr.Recognizer() if sr is not None else None
         except Exception:
             self.recognizer = None
-        try:
-            self.vosk_model = None
-        except Exception:
-            self.vosk_model = None
-    
-    def _ensure_vosk(self):
-        try:
-            if _vosk is None:
-                return False
-            if self.vosk_model is not None:
-                return True
-            base_dir = os.path.join(os.path.dirname(__file__), "models")
-            try:
-                os.makedirs(base_dir, exist_ok=True)
-            except Exception:
-                pass
-            model_dir = os.path.join(base_dir, "vosk-model-small-pt-0.3")
-            need_download = True
-            try:
-                if os.path.exists(model_dir) and os.path.isdir(model_dir):
-                    need_download = False
-            except Exception:
-                need_download = True
-            if need_download:
-                try:
-                    url = "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip"
-                    r = requests.get(url, timeout=90)
-                    if getattr(r, "status_code", 0) == 200:
-                        zf = zipfile.ZipFile(io.BytesIO(r.content))
-                        zf.extractall(base_dir)
-                except Exception:
-                    pass
-            try:
-                self.vosk_model = _vosk.Model(model_path=model_dir)
-            except Exception:
-                self.vosk_model = None
-            return self.vosk_model is not None
-        except Exception:
-            return False
-    
-    def _transcribe_vosk_file(self, wav_path):
-        try:
-            if not self._ensure_vosk():
-                return None
-            import wave
-            wf = wave.open(wav_path, "rb")
-            rate = wf.getframerate()
-            try:
-                rec = _vosk.KaldiRecognizer(self.vosk_model, rate)
-            except Exception:
-                return None
-            parts = []
-            while True:
-                data = wf.readframes(4000)
-                if not data:
-                    break
-                try:
-                    ok = rec.AcceptWaveform(data)
-                except Exception:
-                    ok = False
-                if ok:
-                    try:
-                        j = json.loads(rec.Result())
-                        t = (j.get("text") or "").strip()
-                        if t:
-                            parts.append(t)
-                    except Exception:
-                        pass
-            try:
-                j = json.loads(rec.FinalResult())
-                t = (j.get("text") or "").strip()
-                if t:
-                    parts.append(t)
-            except Exception:
-                pass
-            txt = " ".join([p for p in parts if p.strip()]).strip()
-            if txt:
-                return txt
-            return None
-        except Exception:
-            return None
     
     def transcribe_audio_bytes(self, audio_bytes, mime):
         try:
@@ -212,9 +123,6 @@ class AudioProcessor:
                                 texto = None
                         if texto:
                             return texto
-                    t_v = self._transcribe_vosk_file(temp_path)
-                    if t_v:
-                        return t_v
                 except:
                     pass
                 finally:
@@ -261,9 +169,6 @@ class AudioProcessor:
                                         texto = None
                                 if texto:
                                     return texto
-                        t_v = self._transcribe_vosk_file(out_path)
-                        if t_v:
-                            return t_v
                         # segunda tentativa: converter para 8000 Hz
                         out_path2 = out_path.replace('.wav', '.8k.wav')
                         try:
@@ -284,11 +189,8 @@ class AudioProcessor:
                                                 texto2 = self.recognizer.recognize_google(a3, language='pt-BR', show_all=False)
                                         except:
                                             texto2 = None
-                                    if texto2:
-                                        return texto2
-                            t_v2 = self._transcribe_vosk_file(out_path2)
-                            if t_v2:
-                                return t_v2
+                                        if texto2:
+                                            return texto2
                         except:
                             pass
                     except:
