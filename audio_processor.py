@@ -132,14 +132,15 @@ class AudioProcessor:
                 if t_ai:
                     return t_ai
                 return None
-            if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg'):
+            if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg', 'm4a', 'aac'):
                 try:
                     from imageio_ffmpeg import get_ffmpeg_exe
                     ff = get_ffmpeg_exe()
                 except:
                     ff = shutil.which('ffmpeg') or shutil.which('avconv')
                 if ff:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{format}') as in_file:
+                    ext = 'mp3' if format == 'mpeg' else format
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as in_file:
                         in_file.write(audio_bytes)
                         in_path = in_file.name
                     out_path = in_path.replace(f'.{format}', '.wav')
@@ -166,7 +167,16 @@ class AudioProcessor:
                                 os.remove(out_path)
                         except:
                             pass
-                mime = 'audio/ogg' if format in ('ogg', 'oga', 'opus') else 'audio/mpeg'
+                if format in ('ogg', 'oga', 'opus'):
+                    mime = 'audio/ogg'
+                elif format in ('mp3', 'mpeg'):
+                    mime = 'audio/mpeg'
+                elif format == 'm4a':
+                    mime = 'audio/mp4'
+                elif format == 'aac':
+                    mime = 'audio/aac'
+                else:
+                    mime = 'audio/mpeg'
                 t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
                 if t_ai:
                     return t_ai

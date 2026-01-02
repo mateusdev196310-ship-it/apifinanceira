@@ -260,6 +260,13 @@ def _scheduler_thread(interval_seconds: int = 60):
         pass
     while True:
         try:
+            import datetime as _dt, time as _t
+            now = _dt.datetime.now()
+            target = now.replace(hour=8, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target = target + _dt.timedelta(days=1)
+            wait_s = max(1, int((target - now).total_seconds()))
+            _t.sleep(wait_s)
             clientes = []
             try:
                 clientes = list(db.collection("clientes").stream())
@@ -270,8 +277,17 @@ def _scheduler_thread(interval_seconds: int = 60):
                 o = c.to_dict() or {}
                 nome = str(o.get("cliente_nome") or o.get("cliente_display") or "")
                 uname = str(o.get("cliente_username") or "")
+                saldo = 0.0
                 try:
-                    msg = mini_report_sync(cid, cliente_nome=nome or None, username=uname or None)
+                    url_s = f"{API_URL}/total/geral?cliente_id={cid}"
+                    r = requests.get(url_s, timeout=6)
+                    j = r.json()
+                    if j.get("sucesso"):
+                        saldo = float(j.get("total", {}).get("saldo", 0) or 0)
+                except:
+                    saldo = 0.0
+                try:
+                    msg = "🔔 LEMBRETE: Registre suas transações hoje!\n\n" + f"💹 Saldo atual: {formatar_moeda(saldo, negrito=True)}"
                     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                     payload = {"chat_id": cid, "text": msg, "parse_mode": "Markdown"}
                     try:
@@ -281,15 +297,9 @@ def _scheduler_thread(interval_seconds: int = 60):
                 except:
                     pass
                 try:
-                    import time as _t
                     _t.sleep(0.05)
                 except:
                     pass
-        except:
-            pass
-        try:
-            import time as _t
-            _t.sleep(interval_seconds)
         except:
             break
 
@@ -3531,7 +3541,18 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             )
             _bg_semaphore.release()
             return
-        fmt = 'mp3' if str(a.mime_type or '').endswith('mpeg') or str(a.file_name or '').lower().endswith('.mp3') else 'ogg'
+        mt = str(a.mime_type or '').lower()
+        fn = str(a.file_name or '').lower()
+        if fn.endswith('.m4a') or 'mp4' in mt:
+            fmt = 'm4a'
+        elif fn.endswith('.aac') or 'aac' in mt:
+            fmt = 'aac'
+        elif fn.endswith('.mp3') or 'mpeg' in mt:
+            fmt = 'mp3'
+        elif fn.endswith('.ogg') or fn.endswith('.oga') or fn.endswith('.opus') or 'ogg' in mt or 'opus' in mt:
+            fmt = 'ogg'
+        else:
+            fmt = 'ogg'
         from audio_processor import audio_processor
         texto = await asyncio.to_thread(audio_processor.transcribe_audio_file, audio_bytes, format=fmt)
         if not texto:
