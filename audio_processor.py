@@ -10,6 +10,13 @@ from google.genai import types
 import time
 import subprocess
 import shutil
+try:
+    from vosk import Model, KaldiRecognizer
+except Exception:
+    Model = None
+    KaldiRecognizer = None
+import wave
+import json
 
 class AudioProcessor:
     """Processa áudio do Telegram para texto."""
@@ -19,6 +26,63 @@ class AudioProcessor:
             self.recognizer = sr.Recognizer() if sr is not None else None
         except Exception:
             self.recognizer = None
+        self._vosk_model = None
+    
+    def _vosk_model_path(self):
+        try:
+            p = os.getenv("VOSK_MODEL_PATH")
+            if p and os.path.exists(p):
+                return p
+            candidates = [
+                os.path.join(os.getcwd(), "vosk-model-small-pt-0.3"),
+                os.path.join(os.getcwd(), "models", "vosk-model-small-pt-0.3"),
+                os.path.join(os.getcwd(), "__restore_temp", "api_financeira", "vosk-model-small-pt-0.3"),
+            ]
+            for c in candidates:
+                if os.path.exists(c):
+                    return c
+            return None
+        except Exception:
+            return None
+    
+    def _get_vosk_model(self):
+        try:
+            if self._vosk_model is not None:
+                return self._vosk_model
+            if Model is None:
+                return None
+            p = self._vosk_model_path()
+            if p and os.path.isdir(p):
+                self._vosk_model = Model(p)
+                return self._vosk_model
+            return None
+        except Exception:
+            return None
+    
+    def transcribe_wav_with_vosk(self, wav_path):
+        try:
+            mdl = self._get_vosk_model()
+            if mdl is None or KaldiRecognizer is None:
+                return None
+            with wave.open(wav_path, "rb") as wf:
+                rate = wf.getframerate()
+                rec = KaldiRecognizer(mdl, rate)
+                while True:
+                    data = wf.readframes(4000)
+                    if not data:
+                        break
+                    rec.AcceptWaveform(data)
+                r = rec.FinalResult()
+                try:
+                    j = json.loads(r or "{}")
+                    tx = str(j.get("text") or "").strip()
+                    if tx:
+                        return tx
+                except Exception:
+                    return None
+            return None
+        except Exception:
+            return None
     
     def transcribe_audio_bytes(self, audio_bytes, mime):
         try:
@@ -60,34 +124,31 @@ class AudioProcessor:
     
     def transcribe_audio(self, audio_path):
         try:
-            try:
-                client = get_client()
-            except:
-                client = None
-            if client is not None:
-                try:
-                    with open(audio_path, 'rb') as f:
-                        dados = f.read()
-                    mime = 'audio/wav' if audio_path.endswith('.wav') else ('audio/ogg' if audio_path.endswith('.ogg') else 'audio/mpeg')
-                    texto = self.transcribe_audio_bytes(dados, mime)
-                    if texto:
-                        return texto
-                except:
-                    pass
             if self.recognizer is not None and audio_path.endswith('.wav'):
-                with sr.AudioFile(audio_path) as source:
-                    self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                    audio_data = self.recognizer.record(source)
-                    texto = self.recognizer.recognize_google(
-                        audio_data,
-                        language='pt-BR',
-                        show_all=False
-                    )
+                try:
+                    with sr.AudioFile(audio_path) as source:
+                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                        audio_data = self.recognizer.record(source)
+                        texto = self.recognizer.recognize_google(audio_data, language='pt-BR', show_all=False)
+                        if texto:
+                            return texto
+                except Exception:
+                    pass
+                try:
+                    vtxt = self.transcribe_wav_with_vosk(audio_path)
+                    if vtxt:
+                        return vtxt
+                except Exception:
+                    pass
+            try:
+                with open(audio_path, 'rb') as f:
+                    dados = f.read()
+                mime = 'audio/wav' if audio_path.endswith('.wav') else ('audio/ogg' if audio_path.endswith('.ogg') else 'audio/mpeg')
+                texto = self.transcribe_audio_bytes(dados, mime)
+                if texto:
                     return texto
-            return None
-        except sr.UnknownValueError:
-            return None
-        except sr.RequestError:
+            except Exception:
+                pass
             return None
         except Exception:
             return None
@@ -95,7 +156,7 @@ class AudioProcessor:
             try:
                 if os.path.exists(audio_path):
                     os.remove(audio_path)
-            except:
+            except Exception:
                 pass
     
     def transcribe_audio_file(self, audio_bytes, format='ogg'):
@@ -121,6 +182,13 @@ class AudioProcessor:
                                     texto = self.recognizer.recognize_google(a2, language='pt-BR', show_all=False)
                             except:
                                 texto = None
+                        if not texto:
+                            try:
+                                vtxt0 = self.transcribe_wav_with_vosk(temp_path)
+                            except Exception:
+                                vtxt0 = None
+                            if vtxt0:
+                                return vtxt0
                         if texto:
                             return texto
                 except:
@@ -167,6 +235,13 @@ class AudioProcessor:
                                             texto = self.recognizer.recognize_google(a2, language='pt-BR', show_all=False)
                                     except:
                                         texto = None
+                                if not texto:
+                                    try:
+                                        vtxt = self.transcribe_wav_with_vosk(out_path)
+                                    except Exception:
+                                        vtxt = None
+                                    if vtxt:
+                                        return vtxt
                                 if texto:
                                     return texto
                         # segunda tentativa: converter para 8000 Hz
@@ -189,8 +264,15 @@ class AudioProcessor:
                                                 texto2 = self.recognizer.recognize_google(a3, language='pt-BR', show_all=False)
                                         except:
                                             texto2 = None
-                                        if texto2:
-                                            return texto2
+                                    if not texto2:
+                                        try:
+                                            vtxt2 = self.transcribe_wav_with_vosk(out_path2)
+                                        except Exception:
+                                            vtxt2 = None
+                                        if vtxt2:
+                                            return vtxt2
+                                    if texto2:
+                                        return texto2
                         except:
                             pass
                     except:
