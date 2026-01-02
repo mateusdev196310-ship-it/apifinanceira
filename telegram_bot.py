@@ -2699,23 +2699,6 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             resposta += f"{emoji} *{tipo}:* {formatar_moeda(transacao['valor'])}\n"
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
-        try:
-            cid = str(update.effective_chat.id)
-            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
-            if extrato.get("sucesso"):
-                tot = extrato.get("total", {})
-                resposta += "💰 *TOTAIS DO DIA*\n"
-                caixa = ""
-                caixa += "+" + ("-" * 28) + "+\n"
-                caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += "+" + ("-" * 28) + "+"
-                resposta += wrap_code_block(caixa) + "\n\n"
-                saldo_geral = obter_saldo_geral(str(update.effective_chat.id))
-                resposta += f"💹 *Saldo final atual:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
-        except:
-            pass
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
@@ -2732,8 +2715,34 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             message_id=processing_msg.message_id,
             text=resposta,
             parse_mode='Markdown',
-            reply_markup=reply_markup
+        reply_markup=reply_markup
         )
+        async def _enviar_totais():
+            try:
+                qs = build_cliente_query_params(update)
+                t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
+                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
+                extrato, sj = await asyncio.gather(t1, t2)
+                if extrato.get("sucesso"):
+                    tot = extrato.get("total", {})
+                    caixa = ""
+                    caixa += "+" + ("-" * 28) + "+\n"
+                    caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += "+" + ("-" * 28) + "+"
+                    msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa) + "\n\n"
+                    try:
+                        if sj.get("sucesso"):
+                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
+                            msg += f"💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
+                    except:
+                        pass
+                    msg += "📊 *Use /total para ver os totais atualizados*"
+                    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+            except:
+                pass
+        asyncio.create_task(_enviar_totais())
         _bg_semaphore.release()
     except:
         try:
@@ -2919,22 +2928,6 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(t.get('valor', 0)))}\n"
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
-        try:
-            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
-            if extrato.get("sucesso"):
-                tot = extrato.get("total", {})
-                resposta += "💰 *TOTAIS DO DIA*\n"
-                caixa = ""
-                caixa += "+" + ("-" * 28) + "+\n"
-                caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += "+" + ("-" * 28) + "+"
-                resposta += wrap_code_block(caixa) + "\n\n"
-        except:
-            pass
-        saldo_geral = obter_saldo_geral(str(update.effective_chat.id))
-        resposta += f"💹 *Saldo final atual:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
@@ -2951,6 +2944,32 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        async def _enviar_totais_img():
+            try:
+                qs = build_cliente_query_params(update)
+                t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
+                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
+                extrato, sj = await asyncio.gather(t1, t2)
+                if extrato.get("sucesso"):
+                    tot = extrato.get("total", {})
+                    caixa = ""
+                    caixa += "+" + ("-" * 28) + "+\n"
+                    caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += "+" + ("-" * 28) + "+"
+                    msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa)
+                    try:
+                        if sj.get("sucesso"):
+                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
+                            msg += f"\n\n💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
+                    except:
+                        pass
+                    msg += "📊 *Use /total para ver os totais atualizados*"
+                    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+            except:
+                pass
+        asyncio.create_task(_enviar_totais_img())
         _bg_semaphore.release()
     except:
         try:
@@ -3421,22 +3440,6 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(t.get('valor', 0)))}\n"
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
-        try:
-            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
-            if extrato.get("sucesso"):
-                tot = extrato.get("total", {})
-                resposta += "💰 *TOTAIS DO DIA*\n"
-                caixa = ""
-                caixa += "+" + ("-" * 28) + "+\n"
-                caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += "+" + ("-" * 28) + "+"
-                resposta += wrap_code_block(caixa) + "\n\n"
-        except:
-            pass
-        saldo_geral = obter_saldo_geral(str(update.effective_chat.id))
-        resposta += f"💹 *Saldo final atual:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
@@ -3453,6 +3456,32 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        async def _enviar_totais_audio():
+            try:
+                qs = build_cliente_query_params(update)
+                t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
+                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
+                extrato, sj = await asyncio.gather(t1, t2)
+                if extrato.get("sucesso"):
+                    tot = extrato.get("total", {})
+                    caixa = ""
+                    caixa += "+" + ("-" * 28) + "+\n"
+                    caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += "+" + ("-" * 28) + "+"
+                    msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa)
+                    try:
+                        if sj.get("sucesso"):
+                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
+                            msg += f"\n\n💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
+                    except:
+                        pass
+                    msg += "📊 *Use /total para ver os totais atualizados*"
+                    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+            except:
+                pass
+        asyncio.create_task(_enviar_totais_audio())
         _bg_semaphore.release()
     except:
         try:
@@ -3616,22 +3645,6 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(t.get('valor', 0)))}\n"
             resposta += f"   `{desc_json}`\n"
             resposta += f"   Categoria: {cat_nome}\n\n"
-        try:
-            extrato = await _req_json_async(f"{API_URL}/extrato/hoje?{build_cliente_query_params(update)}", timeout=4)
-            if extrato.get("sucesso"):
-                tot = extrato.get("total", {})
-                resposta += "💰 *TOTAIS DO DIA*\n"
-                caixa = ""
-                caixa += "+" + ("-" * 28) + "+\n"
-                caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-                caixa += "+" + ("-" * 28) + "+"
-                resposta += wrap_code_block(caixa) + "\n\n"
-        except:
-            pass
-        saldo_geral = obter_saldo_geral(str(update.effective_chat.id))
-        resposta += f"💹 *Saldo final atual:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
@@ -3648,6 +3661,32 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        async def _enviar_totais_audio2():
+            try:
+                qs = build_cliente_query_params(update)
+                t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
+                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
+                extrato, sj = await asyncio.gather(t1, t2)
+                if extrato.get("sucesso"):
+                    tot = extrato.get("total", {})
+                    caixa = ""
+                    caixa += "+" + ("-" * 28) + "+\n"
+                    caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+                    caixa += "+" + ("-" * 28) + "+"
+                    msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa)
+                    try:
+                        if sj.get("sucesso"):
+                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
+                            msg += f"\n\n💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
+                    except:
+                        pass
+                    msg += "📊 *Use /total para ver os totais atualizados*"
+                    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+            except:
+                pass
+        asyncio.create_task(_enviar_totais_audio2())
         _bg_semaphore.release()
     except:
         try:
