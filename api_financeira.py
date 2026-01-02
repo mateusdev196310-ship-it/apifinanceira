@@ -1709,6 +1709,23 @@ def saldo_atual():
                     saldo = float(mm.get("saldo_mes")) if mm.get("saldo_mes") is not None else (total_receitas - total_despesas + total_ajustes)
                 except:
                     saldo = total_receitas - total_despesas + total_ajustes
+                saldo_real = saldo
+                try:
+                    sr = 0.0
+                    for mdoc2 in root.collection('meses').stream():
+                        mid = str(mdoc2.id or "")
+                        if mid and mid <= mes:
+                            mo = mdoc2.to_dict() or {}
+                            try:
+                                v = float(mo.get("saldo_mes")) if mo.get("saldo_mes") is not None else (
+                                    float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0)
+                                )
+                            except:
+                                v = (float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0))
+                            sr += float(v or 0)
+                    saldo_real = float(sr or saldo)
+                except:
+                    saldo_real = saldo
                 need_fallback = False
                 try:
                     need_fallback = (total_despesas == 0.0 and total_receitas == 0.0 and total_ajustes == 0.0 and total_estornos == 0.0)
@@ -1768,6 +1785,35 @@ def saldo_atual():
                     total_ajustes += float(dd.get("total_ajuste", 0) or 0)
                     total_estornos += float(dd.get("total_estorno", 0) or 0)
                     dt_cur += timedelta(days=1)
+                saldo_real = None
+                try:
+                    dtf = datetime.strptime(dt_fim, "%Y-%m-%d")
+                    mes_f = dtf.strftime("%Y-%m")
+                    sr = 0.0
+                    for mdoc3 in root.collection('meses').stream():
+                        mid = str(mdoc3.id or "")
+                        if mid and mid < mes_f:
+                            mo = mdoc3.to_dict() or {}
+                            try:
+                                v = float(mo.get("saldo_mes")) if mo.get("saldo_mes") is not None else (
+                                    float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0)
+                                )
+                            except:
+                                v = (float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0))
+                            sr += float(v or 0)
+                    base = datetime.strptime(f"{mes_f}-01", "%Y-%m-%d")
+                    cur2 = base
+                    while cur2 <= dtf:
+                        k = cur2.strftime("%Y-%m-%d")
+                        try:
+                            dd2 = root.collection('dias').document(k).get().to_dict() or {}
+                            sr += float(dd2.get("total_entrada", 0) or 0) - float(dd2.get("total_saida", 0) or 0) + float(dd2.get("total_ajuste", 0) or 0)
+                        except:
+                            pass
+                        cur2 = cur2 + timedelta(days=1)
+                    saldo_real = float(sr or 0)
+                except:
+                    saldo_real = None
             else:
                 # Sem intervalo: somar todos os meses do cliente
                 for m in root.collection('meses').stream():
@@ -1777,6 +1823,15 @@ def saldo_atual():
                     total_ajustes += float(mm.get("total_ajuste", 0) or 0)
                     total_estornos += float(mm.get("total_estorno", 0) or 0)
             saldo = total_receitas - total_despesas + total_ajustes
+            if mes:
+                try:
+                    pass
+                except:
+                    pass
+            if dt_ini and dt_fim and saldo_real is None:
+                saldo_real = saldo
+            if not mes and not dt_ini and not dt_fim:
+                saldo_real = saldo
             return jsonify({
                 "sucesso": True,
                 "filtros": {
@@ -1791,6 +1846,7 @@ def saldo_atual():
                     "despesas": total_despesas,
                     "receitas": total_receitas,
                     "saldo": saldo,
+                    "saldo_real": float(saldo_real if saldo_real is not None else saldo),
                     "estornos": total_estornos,
                     "ajustes": total_ajustes
                 }
