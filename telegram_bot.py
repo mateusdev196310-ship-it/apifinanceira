@@ -2750,7 +2750,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
 # ===== MAIN =====
 def main() -> None:
     """Inicia o bot formatado."""
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    application = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(32).build()
     
     # Handlers de comandos
     application.add_handler(CommandHandler("start", start))
