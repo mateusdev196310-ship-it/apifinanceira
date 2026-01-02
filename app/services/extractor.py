@@ -5,139 +5,130 @@ from app.constants.categories import CATEGORY_LIST
 from google.genai import types
 from app.services.rule_based import parse_text_to_transactions, naturalize_description, natural_score
 def extrair_informacoes_financeiras(texto_usuario):
-    prompt = (f'''ANALISE ESTA MENSAGEM E EXTRAIA TODAS AS INFORMAÇÕES FINANCEIRAS:
-
-Mensagem do usuário: "{texto_usuario}"
-
-RETORNE APENAS UM ARRAY JSON COM OBJETOS DESTA ESTRUTURA:
-[
-    {
-        "tipo": "0" para despesa ou "1" para receita,
-        "valor": número decimal com duas casas,
-        "categoria": {", ".join(CATEGORY_LIST)},
-        "descricao": "descrição breve",
-        "moeda": "BRL"
-    }
-]
-
-REGRAS:
-1. Tipo:
-   - Despesa (gastei, paguei, comprei, custou, transferi) → "0"
-   - Receita (recebi, ganhei, vendi, salário, freela) → "1"
-2. Categoria: use apenas as listadas. Se ambígua, use "outros". "vendas" para venda/vendi. "salario" somente com menção explícita a salário/holerite/folha/contracheque.
-3. Valor: extraia número decimal com duas casas. Suporta formatos como "1.500", "1,500.00", "477,17", "R$ 50". Converta para 50.00, 477.17 etc.
-4. Descrição:
-   - Curta (3–6 palavras), clara e objetiva, fiel ao que o usuário disse.
-   - Remova números e moeda; não use "por X" (preço vai no campo valor).
-   - Complete preposições: use "da/do/das/dos/para" com o objeto correto.
-   - Forma nominal:
-    • Venda: "Venda de …" (ex.: "Venda de calça", "Venda de peça da moto")
-    • Transferência recebida: "Transferência de …" (ex.: "Transferência da prima")
-    • Transferência enviada: "Transferência para …" (ex.: "Transferência para a prima")
-    • Despesa: "Gastos com …" (ex.: "Gastos com peça da moto", "Gastos com internet")
-   - Preserve substantivos principais e nomes próprios/marcas (ex.: "Netflix", "Banco do Brasil"). Evite adjetivos e palavras vazias ("meu", "minha", "uma", "um"), use apenas se necessário para fluência.
-5. Múltiplas transações: mensagens podem conter várias; retorne um array com todas.
-6. Deduplicação: se houver transações repetidas (mesmo tipo/valor/categoria), mantenha apenas uma com a descrição mais curta e clara.
-7. Saída: retorne SOMENTE o ARRAY JSON, sem textos extras.
-
-EXEMPLOS:
-- "gastei 50 no mercado"
-[
-  {
-    "tipo": "0",
-    "valor": 50.00,
-    "categoria": "alimentacao",
-    "descricao": "Gastos com mercado",
-    "moeda": "BRL"
-  }
-]
-
-- "recebi 1000 de salário"
-[
-  {
-    "tipo": "1",
-    "valor": 1000.00,
-    "categoria": "salario",
-    "descricao": "salário",
-    "moeda": "BRL"
-  }
-]
-
-- "recebi uma transferência de 500 da minha prima"
-[
-  {
-    "tipo": "1",
-    "valor": 500.00,
-    "categoria": "outros",
-    "descricao": "Transferência da prima",
-    "moeda": "BRL"
-  }
-]
-
-- "recebi pix do joao 100"
-[
-  {
-    "tipo": "1",
-    "valor": 100.00,
-    "categoria": "outros",
-    "descricao": "Transferência de João",
-    "moeda": "BRL"
-  }
-]
-
-- "vendi uma calça por 50"
-[
-  {
-    "tipo": "1",
-    "valor": 50.00,
-    "categoria": "vendas",
-    "descricao": "Venda de calça",
-    "moeda": "BRL"
-  }
-]
-
-- "transferi 500 para a minha prima"
-[
-  {
-    "tipo": "0",
-    "valor": 500.00,
-    "categoria": "outros",
-    "descricao": "Transferência para a prima",
-    "moeda": "BRL"
-  }
-]
-
-- "gastei 300 com uma peça da moto"
-[
-  {
-    "tipo": "0",
-    "valor": 300.00,
-    "categoria": "outros",
-    "descricao": "Gastos com peça da moto",
-    "moeda": "BRL"
-  }
-]
-
-- "gastei 120 internet e ganhei 200 de vendas"
-[
-  {
-    "tipo": "0",
-    "valor": 120.00,
-    "categoria": "servicos",
-    "descricao": "Gastos com internet",
-    "moeda": "BRL"
-  },
-  {
-    "tipo": "1",
-    "valor": 200.00,
-    "categoria": "vendas",
-    "descricao": "vendas",
-    "moeda": "BRL"
-  }
-]
-
-RETORNE SOMENTE O JSON ARRAY, SEM TEXTOS ADICIONAIS.'''
-    '''EXEMPLOS ADICIONAIS:
+    cat_list = ", ".join(CATEGORY_LIST)
+    prompt = (
+        "ANALISE ESTA MENSAGEM E EXTRAIA TODAS AS INFORMAÇÕES FINANCEIRAS:\n\n"
+        f'Mensagem do usuário: "{texto_usuario}"\n\n'
+        "RETORNE APENAS UM ARRAY JSON COM OBJETOS DESTA ESTRUTURA:\n"
+        "[\n"
+        "    {\n"
+        '        "tipo": "0" para despesa ou "1" para receita,\n'
+        '        "valor": número decimal com duas casas,\n'
+        f'        "categoria": {cat_list},\n'
+        '        "descricao": "descrição breve",\n'
+        '        "moeda": "BRL"\n'
+        "    }\n"
+        "]\n\n"
+        "REGRAS:\n"
+        "1. Tipo:\n"
+        '   - Despesa (gastei, paguei, comprei, custou, transferi) → "0"\n'
+        '   - Receita (recebi, ganhei, vendi, salário, freela) → "1"\n'
+        '2. Categoria: use apenas as listadas. Se ambígua, use "outros". "vendas" para venda/vendi. "salario" somente com menção explícita a salário/holerite/folha/contracheque.\n'
+        '3. Valor: extraia número decimal com duas casas. Suporta formatos como "1.500", "1,500.00", "477,17", "R$ 50". Converta para 50.00, 477.17 etc.\n'
+        "4. Descrição:\n"
+        '   - Curta (3–6 palavras), clara e objetiva, fiel ao que o usuário disse.\n'
+        '   - Remova números e moeda; não use "por X" (preço vai no campo valor).\n'
+        '   - Complete preposições: use "da/do/das/dos/para" com o objeto correto.\n'
+        "   - Forma nominal:\n"
+        '    • Venda: "Venda de …" (ex.: "Venda de calça", "Venda de peça da moto")\n'
+        '    • Transferência recebida: "Transferência de …" (ex.: "Transferência da prima")\n'
+        '    • Transferência enviada: "Transferência para …" (ex.: "Transferência para a prima")\n'
+        '    • Despesa: "Gastos com …" (ex.: "Gastos com peça da moto", "Gastos com internet")\n'
+        '   - Preserve substantivos principais e nomes próprios/marcas (ex.: "Netflix", "Banco do Brasil"). Evite adjetivos e palavras vazias ("meu", "minha", "uma", "um"), use apenas se necessário para fluência.\n'
+        "5. Múltiplas transações: mensagens podem conter várias; retorne um array com todas.\n"
+        "6. Deduplicação: se houver transações repetidas (mesmo tipo/valor/categoria), mantenha apenas uma com a descrição mais curta e clara.\n"
+        "7. Saída: retorne SOMENTE o ARRAY JSON, sem textos extras.\n\n"
+        "EXEMPLOS:\n"
+        '- "gastei 50 no mercado"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "0",\n'
+        '    "valor": 50.00,\n'
+        '    "categoria": "alimentacao",\n'
+        '    "descricao": "Gastos com mercado",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "recebi 1000 de salário"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "1",\n'
+        '    "valor": 1000.00,\n'
+        '    "categoria": "salario",\n'
+        '    "descricao": "salário",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "recebi uma transferência de 500 da minha prima"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "1",\n'
+        '    "valor": 500.00,\n'
+        '    "categoria": "outros",\n'
+        '    "descricao": "Transferência da prima",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "recebi pix do joao 100"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "1",\n'
+        '    "valor": 100.00,\n'
+        '    "categoria": "outros",\n'
+        '    "descricao": "Transferência de João",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "vendi uma calça por 50"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "1",\n'
+        '    "valor": 50.00,\n'
+        '    "categoria": "vendas",\n'
+        '    "descricao": "Venda de calça",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "transferi 500 para a minha prima"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "0",\n'
+        '    "valor": 500.00,\n'
+        '    "categoria": "outros",\n'
+        '    "descricao": "Transferência para a prima",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "gastei 300 com uma peça da moto"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "0",\n'
+        '    "valor": 300.00,\n'
+        '    "categoria": "outros",\n'
+        '    "descricao": "Gastos com peça da moto",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        '- "gastei 120 internet e ganhei 200 de vendas"\n'
+        "[\n"
+        "  {\n"
+        '    "tipo": "0",\n'
+        '    "valor": 120.00,\n'
+        '    "categoria": "servicos",\n'
+        '    "descricao": "Gastos com internet",\n'
+        '    "moeda": "BRL"\n'
+        "  },\n"
+        "  {\n"
+        '    "tipo": "1",\n'
+        '    "valor": 200.00,\n'
+        '    "categoria": "vendas",\n'
+        '    "descricao": "vendas",\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
+        "]\n\n"
+        "RETORNE SOMENTE O JSON ARRAY, SEM TEXTOS ADICIONAIS.\n"
+    )
+    prompt += '''EXEMPLOS ADICIONAIS:
 - "gastei 60 na padaria"
 [
   {
@@ -286,7 +277,7 @@ RETORNE SOMENTE O JSON ARRAY, SEM TEXTOS ADICIONAIS.'''
   }
 ]
 '''
-    '''EXEMPLOS COM MARCAS E GRANDES VALORES:
+    prompt += '''EXEMPLOS COM MARCAS E GRANDES VALORES:
 - "paguei 39,90 da Netflix"
 [
   {
@@ -435,7 +426,6 @@ RETORNE SOMENTE O JSON ARRAY, SEM TEXTOS ADICIONAIS.'''
   }
 ]
 '''
-    )
     try:
         rb = parse_text_to_transactions(texto_usuario)
         if rb:
