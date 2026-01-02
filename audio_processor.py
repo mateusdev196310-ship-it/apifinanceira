@@ -111,13 +111,21 @@ class AudioProcessor:
                     temp_path = tmp_file.name
                 try:
                     with sr.AudioFile(temp_path) as source:
-                        self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                        self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
                         audio_data = self.recognizer.record(source)
-                        texto = self.recognizer.recognize_google(
-                            audio_data,
-                            language='pt-BR',
-                            show_all=False
-                        )
+                        texto = None
+                        try:
+                            texto = self.recognizer.recognize_google(audio_data, language='pt-BR', show_all=False)
+                        except:
+                            texto = None
+                        if not texto:
+                            try:
+                                # tentativa sem ajuste de ruído
+                                with sr.AudioFile(temp_path) as s2:
+                                    a2 = self.recognizer.record(s2)
+                                    texto = self.recognizer.recognize_google(a2, language='pt-BR', show_all=False)
+                            except:
+                                texto = None
                         if texto:
                             return texto
                 except:
@@ -153,13 +161,20 @@ class AudioProcessor:
                         subprocess.run([ff, '-y', '-i', in_path, '-ar', '16000', '-ac', '1', out_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         if self.recognizer is not None:
                             with sr.AudioFile(out_path) as source:
-                                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                                self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
                                 audio_data = self.recognizer.record(source)
-                                texto = self.recognizer.recognize_google(
-                                    audio_data,
-                                    language='pt-BR',
-                                    show_all=False
-                                )
+                                texto = None
+                                try:
+                                    texto = self.recognizer.recognize_google(audio_data, language='pt-BR', show_all=False)
+                                except:
+                                    texto = None
+                                if not texto:
+                                    try:
+                                        with sr.AudioFile(out_path) as s2:
+                                            a2 = self.recognizer.record(s2)
+                                            texto = self.recognizer.recognize_google(a2, language='pt-BR', show_all=False)
+                                    except:
+                                        texto = None
                                 if texto:
                                     return texto
                     except:
