@@ -1411,7 +1411,8 @@ async def relatorio_diario(query, context):
         caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(stats_dia['saldo'], negrito=False), True, '', largura=28)}|\n"
         caixa += "+" + ("-" * 28) + "+"
         resposta += wrap_code_block(caixa) + "\n\n"
-        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(stats_dia['saldo'], negrito=True)}\n\n"
+        saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
         try:
             estornos_dia = sum(float(t.get('valor', 0) or 0) for t in transacoes_dia if str(t.get('tipo', '')).strip().lower() == 'estorno')
             if estornos_dia > 0:
