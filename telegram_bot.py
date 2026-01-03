@@ -1432,7 +1432,7 @@ async def resumo_financeiro(query, context):
 # ===== RELATÓRIO DIÁRIO DETALHADO =====
 async def relatorio_diario(query, context):
     """Gera relatório detalhado do dia."""
-    hoje = datetime.now()
+    hoje = _now_sp()
     data_str = hoje.strftime("%d/%m/%Y")
     processing_msg = None
     try:
@@ -1502,7 +1502,11 @@ async def relatorio_diario(query, context):
                 if 'timestamp' in t:
                     try:
                         dt = datetime.fromisoformat(t['timestamp'].replace('Z', '+00:00'))
-                        hora = dt.astimezone().strftime("%H:%M")
+                        try:
+                            tz = _TZ_SP
+                        except:
+                            tz = None
+                        hora = (dt.astimezone(tz) if tz is not None else dt.astimezone()).strftime("%H:%M")
                     except:
                         hora = ""
                 resposta += f"  {emoji} {formatar_moeda(t['valor'])}"
@@ -1795,7 +1799,7 @@ async def analise_mensal(query, context):
             pass
 
 async def resumo_hoje(query, context):
-    hoje = datetime.now()
+    hoje = _now_sp()
     data_str = hoje.strftime("%d/%m/%Y")
     processing_msg = None
     try:
@@ -1877,7 +1881,7 @@ async def resumo_hoje(query, context):
         except:
             pass
 async def total_semana(query, context):
-    hoje = datetime.now()
+    hoje = _now_sp()
     processing_msg = None
     try:
         if hasattr(query, 'edit_message_text'):
