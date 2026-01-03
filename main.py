@@ -2,11 +2,37 @@ import argparse
 import threading
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.config import TELEGRAM_BOT_TOKEN, API_HOST, API_PORT, GEMINI_API_KEY
 import api_financeira
 import telegram_bot
 import json
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+_TZ_SP = None
+try:
+    if ZoneInfo is not None:
+        _TZ_SP = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    _TZ_SP = None
+def _now_sp():
+    try:
+        now_utc = datetime.now(timezone.utc)
+        tz = None
+        try:
+            tz = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
+        except Exception:
+            tz = None
+        return now_utc.astimezone(tz) if tz is not None else (now_utc + timedelta(hours=-3))
+    except:
+        return datetime.now()
+def _month_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m")
+    except:
+        return datetime.now().strftime("%Y-%m")
 try:
     from app.services.database import migrate_all_clientes, migrate_cliente_transacoes_to_nested, recompute_cliente_aggregates, get_db, firestore
 except Exception:
@@ -92,8 +118,8 @@ def _consistency_monitor(interval_seconds: int = 300, recent_hours: int = 8):
         return
     while True:
         try:
-            now = datetime.now()
-            mes_atual = now.strftime("%Y-%m")
+            now = _now_sp()
+            mes_atual = _month_key_sp()
             try:
                 clientes = list(db.collection("clientes").stream())
             except Exception:
@@ -106,7 +132,12 @@ def _consistency_monitor(interval_seconds: int = 300, recent_hours: int = 8):
                 try:
                     if ls:
                         dt = datetime.fromisoformat(ls.replace("Z", "+00:00"))
-                        delta = now - dt.astimezone().replace(tzinfo=None)
+                        try:
+                            dt_sp = dt.astimezone(_TZ_SP) if _TZ_SP is not None else dt.astimezone()
+                        except Exception:
+                            dt_sp = dt.astimezone()
+                        now_naive = now.replace(tzinfo=None)
+                        delta = now_naive - dt_sp.replace(tzinfo=None)
                         ok = delta.total_seconds() <= recent_hours * 3600
                 except Exception:
                     ok = True

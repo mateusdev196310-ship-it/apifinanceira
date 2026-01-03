@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
@@ -24,6 +24,37 @@ except:
 
 _app = None
 _db = None
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+_TZ_SP = None
+try:
+    if ZoneInfo is not None:
+        _TZ_SP = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    _TZ_SP = None
+def _now_sp():
+    try:
+        now_utc = datetime.now(timezone.utc)
+        tz = None
+        try:
+            tz = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
+        except Exception:
+            tz = None
+        return now_utc.astimezone(tz) if tz is not None else (now_utc + timedelta(hours=-3))
+    except:
+        return datetime.now()
+def _day_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m-%d")
+    except:
+        return datetime.now().strftime("%Y-%m-%d")
+def _month_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m")
+    except:
+        return datetime.now().strftime("%Y-%m")
 
 def _cred_path():
     p1 = os.getenv("FIREBASE_CREDENTIALS")
@@ -88,7 +119,7 @@ def get_db():
 def ensure_cliente(cliente_id, nome=None, username=None):
     db = get_db()
     root = _cliente_root(cliente_id)
-    now = datetime.now().isoformat()
+    now = _now_sp().isoformat()
     try:
         doc = root.get()
         safe_nm = None
@@ -241,8 +272,8 @@ def normalize_item_for_store(item):
 
 def salvar_no_firestore(dados):
     db = get_db()
-    ts = datetime.now().isoformat()
-    dr = datetime.now().strftime("%Y-%m-%d")
+    ts = _now_sp().isoformat()
+    dr = _day_key_sp()
     arr = dados if isinstance(dados, list) else [dados]
     out = []
     for item in arr or []:
@@ -255,8 +286,8 @@ def salvar_no_firestore(dados):
 def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referencia_id=None, tipo_operacao=None, motivo_ajuste=None):
     db = get_db()
     root = _cliente_root(cliente_id)
-    dr = datetime.now().strftime("%Y-%m-%d")
-    mr = datetime.now().strftime("%Y-%m")
+    dr = _day_key_sp()
+    mr = _month_key_sp()
     arr = dados if isinstance(dados, list) else [dados]
     out = []
     batch = db.batch()
@@ -388,7 +419,7 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
             "tipo": "estorno",
             "categoria": str(o.get("categoria", "outros")),
             "descricao": "estorno",
-            "data_referencia": str(o.get("data_referencia") or datetime.now().strftime("%Y-%m-%d")),
+            "data_referencia": str(o.get("data_referencia") or _day_key_sp()),
             "moeda": str(o.get("moeda", "BRL")),
             "origem": origem,
             "referencia_id": str(referencia_id),
@@ -403,7 +434,7 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
         tp = "entrada"
     else:
         tp = tp_raw
-    dr = str(o.get("data_referencia") or datetime.now().strftime("%Y-%m-%d"))
+    dr = str(o.get("data_referencia") or _day_key_sp())
     if tp not in ("entrada", "saida"):
         return None
     payload = {
@@ -485,7 +516,7 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
     return payload
 def backup_firestore_data(output_path=None):
     db = get_db()
-    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    ts = _now_sp().strftime("%Y%m%dT%H%M%S")
     path = output_path or os.path.join(os.getcwd(), f"backup_firestore_{ts}.json")
     data = {"clientes": {}, "transacoes_root": []}
     try:

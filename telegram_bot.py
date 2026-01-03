@@ -699,7 +699,7 @@ def _mes_key_from_text(texto: str) -> str:
         "outubro": "10", "novembro": "11", "dezembro": "12"
     }
     try:
-        now = datetime.now(_TZ_SP) if _TZ_SP is not None else datetime.now()
+        now = _now_sp()
     except:
         now = datetime.now()
     if re.search(r'\b(este|esse|neste)\s+m[êe]s\b', t):
@@ -730,16 +730,16 @@ def _extract_first_value(texto: str) -> float:
 def _detectar_intencao(texto: str):
     tl = (texto or "").strip().lower()
     if re.search(r'quanto\s+devo', tl):
-        mk = _mes_key_from_text(tl) or datetime.now().strftime("%Y-%m")
+        mk = _mes_key_from_text(tl) or _month_key_sp()
         return {"tipo": "debitos_mes", "mes": mk}
     if re.search(r'(d[aá]\s+pra|posso|consigo)\s+comprar', tl):
         val = _extract_first_value(tl)
-        mk = _mes_key_from_text(tl) or datetime.now().strftime("%Y-%m")
+        mk = _mes_key_from_text(tl) or _month_key_sp()
         return {"tipo": "compra_viabilidade", "valor": val, "mes": mk}
     m_desc = re.match(r'^\s*descri(?:c|ç)ao\s+(.+)$', tl)
     if m_desc:
         termo = m_desc.group(1).strip()
-        mk = _mes_key_from_text(tl) or datetime.now().strftime("%Y-%m")
+        mk = _mes_key_from_text(tl) or _month_key_sp()
         return {"tipo": "buscar_descricao", "termo": termo, "mes": mk}
     return None
 async def iniciar_fluxo_estorno_por_valor(update, context, valor, data_ref, tipo=None, processamento=None):
@@ -904,19 +904,19 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         try:
             mes = query.data.split(":", 1)[1]
         except Exception:
-            mes = datetime.now().strftime("%Y-%m")
+            mes = _month_key_sp()
         await mostrar_debitos_mes(query, context, mes, compact=True)
     elif query.data.startswith("debitos_mes_m:"):
         try:
             mes = query.data.split(":", 1)[1]
         except Exception:
-            mes = datetime.now().strftime("%Y-%m")
+            mes = _month_key_sp()
         await mostrar_debitos_mes(query, context, mes, compact=True)
     elif query.data.startswith("debitos_mes_d:"):
         try:
             mes = query.data.split(":", 1)[1]
         except Exception:
-            mes = datetime.now().strftime("%Y-%m")
+            mes = _month_key_sp()
         await mostrar_debitos_mes(query, context, mes, compact=False)
     elif query.data == "projetados_menu":
         await _menu_projetados(query, context)
@@ -924,11 +924,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         try:
             mes = query.data.split(":", 1)[1]
         except Exception:
-            mes = datetime.now().strftime("%Y-%m")
+            mes = _month_key_sp()
         await mostrar_projetados_mes(query, context, mes)
     elif query.data.startswith("debitos_tipo:"):
         parts = query.data.split(":")
-        mes = parts[1] if len(parts) > 1 else datetime.now().strftime("%Y-%m")
+        mes = parts[1] if len(parts) > 1 else _month_key_sp()
         tipo = parts[2] if len(parts) > 2 else "vencidos"
         compact = True
         try:
@@ -1024,7 +1024,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         parts = query.data.split(":")
         tp = parts[1] if len(parts) > 1 else None
         val = parse_value((parts[2] if len(parts) > 2 else "0").replace("R$", "").strip()) or 0.0
-        dr = parts[3] if len(parts) > 3 else datetime.now().strftime("%Y-%m-%d")
+        dr = parts[3] if len(parts) > 3 else _day_key_sp()
         processamento = query.message
         await iniciar_fluxo_estorno_por_valor(query, context, val, dr, tipo=tp, processamento=processamento)
     elif query.data == "estornar_cancelar":
@@ -1553,10 +1553,7 @@ async def relatorio_diario(query, context):
 # ===== ANÁLISE MENSAL =====
 async def analise_mensal(query, context):
     """Gera análise mensal detalhada."""
-    try:
-        hoje = datetime.now(_TZ_SP) if _TZ_SP is not None else datetime.now()
-    except:
-        hoje = datetime.now()
+    hoje = _now_sp()
     data_str = hoje.strftime("%B/%Y").title()
     dias_no_mes = calendar.monthrange(hoje.year, hoje.month)[1]
     dias_decorridos = hoje.day
@@ -2048,7 +2045,7 @@ async def comando_estornar(update: Update, context: CallbackContext) -> None:
                     await update.message.reply_text("⚠️ Informe um valor válido para estornar.", parse_mode='Markdown')
                     return
                 if not dr:
-                    dr = datetime.now().strftime("%Y-%m-%d")
+            dr = _day_key_sp()
                 await iniciar_fluxo_estorno_por_valor(update, context, v, dr, tipo=tipo, processamento=None)
                 return
             payload = {
@@ -2194,7 +2191,7 @@ async def comando_descricoes(update: Update, context: CallbackContext) -> None:
         await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=kb)
         return
     termo = tail
-    mk = _mes_key_from_text(tail) or datetime.now().strftime("%Y-%m")
+    mk = _mes_key_from_text(tail) or _month_key_sp()
     try:
         url = f"{API_URL}/compromissos/mes?mes={mk}&{build_cliente_query_params(update)}"
         data = requests.get(url, timeout=6).json()
@@ -2240,9 +2237,9 @@ async def _menu_debitos(obj, context):
     except:
         meses = []
     if not meses:
-        hoje = datetime.now()
+        hoje = _now_sp()
         for n in (-1, 0, 1):
-            mk = _add_months(hoje, n).strftime("%Y-%m")
+        mk = _add_months(hoje, n).strftime("%Y-%m")
             meses.append(mk)
     rows = []
     for mk in meses:
@@ -2267,9 +2264,9 @@ async def _menu_projetados(obj, context):
     except:
         meses = []
     if not meses:
-        hoje = datetime.now()
+        hoje = _now_sp()
         for n in (0, 1, 2):
-            mk = _add_months(hoje, n).strftime("%Y-%m")
+        mk = _add_months(hoje, n).strftime("%Y-%m")
             meses.append(mk)
     rows = []
     for mk in meses:
@@ -2299,13 +2296,13 @@ async def comando_compromisso(update: Update, context: CallbackContext) -> None:
             dia = int(m_dia.group(1))
         except:
             dia = None
-    mk = _mes_key_from_text(tail) or datetime.now().strftime("%Y-%m")
+    mk = _mes_key_from_text(tail) or _month_key_sp()
     y, m = mk.split("-")
     try:
         d = dia if dia and 1 <= dia <= 31 else 1
         vencimento = f"{y}-{int(m):02d}-{int(d):02d}"
     except:
-        vencimento = datetime.now().strftime("%Y-%m-%d")
+        vencimento = _day_key_sp()
     desc = tail
     desc = re.sub(r'(?:R?\$?\s*)\d{1,3}(?:[.\s]\d{3})*(?:,\d{2}|\b)', '', desc)
     desc = re.sub(r'\bdia\s+\d{1,2}\b', '', desc, flags=re.IGNORECASE)
@@ -2317,7 +2314,7 @@ async def comando_compromisso(update: Update, context: CallbackContext) -> None:
         root = db.collection('clientes').document(cid)
         status = "v"
         try:
-            hj = datetime.now().strftime("%Y-%m-%d")
+            hj = _day_key_sp()
             if vencimento < hj:
                 status = "st"
         except:
@@ -2358,7 +2355,7 @@ async def comando_meta(update: Update, context: CallbackContext) -> None:
             await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=kb)
             return
         val = _extract_first_value(tail) or 0.0
-        mk = _mes_key_from_text(tail) or datetime.now().strftime("%Y-%m")
+        mk = _mes_key_from_text(tail) or _month_key_sp()
         desc = tail
         desc = re.sub(r'(?:R?\$?\s*)\d{1,3}(?:[.\s]\d{3})*(?:,\d{2}|\b)', '', desc)
         desc = re.sub(r'\bem\s+(janeiro|fevereiro|mar[cç]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+\d{4})?\b', '', desc, flags=re.IGNORECASE)

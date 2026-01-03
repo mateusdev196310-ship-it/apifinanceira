@@ -1,7 +1,7 @@
 # arquivo: api_financeira.py
 from flask import Flask, request, jsonify
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask_cors import CORS
 from app.services.extractor import extrair_informacoes_financeiras
 from app.services.rule_based import parse_text_to_transactions, clean_desc, detect_category, naturalize_description, natural_score
@@ -23,6 +23,38 @@ SOURCE_STATS = {
     "audio-local": 0,
 }
  
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+_TZ_SP = None
+try:
+    if ZoneInfo is not None:
+        _TZ_SP = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    _TZ_SP = None
+def _now_sp():
+    try:
+        now_utc = datetime.now(timezone.utc)
+        tz = None
+        try:
+            tz = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
+        except Exception:
+            tz = None
+        return now_utc.astimezone(tz) if tz is not None else (now_utc + timedelta(hours=-3))
+    except:
+        return datetime.now()
+def _day_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m-%d")
+    except:
+        return datetime.now().strftime("%Y-%m-%d")
+def _month_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m")
+    except:
+        return datetime.now().strftime("%Y-%m")
 
 def _coerce_val(o):
     try:
@@ -135,7 +167,7 @@ def processar():
             "transacoes": transacoes,
             "total": len(transacoes),
             "arquivo": None,
-            "processado_em": datetime.now().isoformat(),
+            "processado_em": _now_sp().isoformat(),
             "debug": {
                 "source": "json-transacoes",
                 "version": "image-doc-v1"
@@ -236,7 +268,7 @@ def processar():
         "transacoes": transacoes,
         "total": len(transacoes),
         "arquivo": None,
-        "processado_em": datetime.now().isoformat(),
+        "processado_em": _now_sp().isoformat(),
         "debug": {
             "ai_count": orig_count,
             "rb_count": len(rb or []),
@@ -312,7 +344,7 @@ def processar_audio():
         "transacoes": transacoes,
         "total": len(transacoes),
         "arquivo": None,
-        "processado_em": datetime.now().isoformat(),
+        "processado_em": _now_sp().isoformat(),
         "debug": {
             "source": "audio-file",
             "texto": texto[:120]
@@ -349,7 +381,7 @@ def processar_pdf():
         "transacoes": transacoes,
         "total": len(transacoes),
         "arquivo": arquivo,
-        "processado_em": datetime.now().isoformat(),
+        "processado_em": _now_sp().isoformat(),
         "debug": {
             "source": "pdf-file"
         },
@@ -426,7 +458,7 @@ def processar_pdf_totais():
                 root = db.collection('clientes').document(cliente_id)
                 st = "vencido"
                 try:
-                    hoje = datetime.now().strftime("%Y-%m-%d")
+                    hoje = _day_key_sp()
                     st = "a_vencer" if venc_iso >= hoje else "vencido"
                 except:
                     st = "a_vencer"
@@ -458,7 +490,7 @@ def processar_pdf_totais():
         "transacoes": transacoes,
         "total": len(transacoes),
         "arquivo": arquivo,
-        "processado_em": datetime.now().isoformat(),
+        "processado_em": _now_sp().isoformat(),
         "debug": {
             "source": "pdf-totais"
         },
@@ -467,7 +499,7 @@ def processar_pdf_totais():
 @app.route('/compromissos/mes', methods=['GET'])
 def compromissos_mes():
     mes_qs = request.args.get("mes")
-    mes_atual = mes_qs or datetime.now().strftime("%Y-%m")
+    mes_atual = mes_qs or _month_key_sp()
     tipo = str(request.args.get("tipo") or "").strip().lower() or None
     try:
         db = get_db()
@@ -499,7 +531,7 @@ def compromissos_mes():
                 itens = list(q.stream())
             except:
                 itens = []
-        hoje = datetime.now().strftime("%Y-%m-%d")
+        hoje = _day_key_sp()
         for it in itens:
             o = it.to_dict() or {}
             v = _coerce_val(o)
@@ -651,7 +683,7 @@ def compromissos_meses():
             pass
         root = db.collection('clientes').document(cliente_id)
         meses = {}
-        hoje = datetime.now().strftime("%Y-%m-%d")
+        hoje = _day_key_sp()
         try:
             docs = list(root.collection('compromissos').stream())
         except:
@@ -681,7 +713,7 @@ def compromissos_meses():
 @app.route('/metas/mes', methods=['GET'])
 def metas_mes():
     mes_qs = request.args.get("mes")
-    mes_atual = mes_qs or datetime.now().strftime("%Y-%m")
+    mes_atual = mes_qs or _month_key_sp()
     try:
         db = get_db()
         cliente_id = str(request.args.get("cliente_id") or "default")
@@ -762,7 +794,7 @@ def metas_adicionar():
             pass
         descricao = str(data.get("descricao", "") or "").strip()
         valor = float(data.get("valor"))
-        mes_atual = str(data.get("mes") or datetime.now().strftime("%Y-%m"))
+        mes_atual = str(data.get("mes") or _month_key_sp())
     except Exception:
         return jsonify({"sucesso": False, "erro": "Campos inválidos"}), 400
     try:
@@ -815,7 +847,7 @@ def ajustes_adicionar():
     try:
         db = get_db()
         root = db.collection('clientes').document(cliente_id)
-        dr = data.get("data_referencia") or datetime.now().strftime("%Y-%m-%d")
+        dr = data.get("data_referencia") or _day_key_sp()
         mref = root.collection('meses').document(dr[:7])
         dref = root.collection('dias').document(dr)
         batch = db.batch()
@@ -897,7 +929,7 @@ def ajustes_estornar():
         return jsonify({
             "sucesso": True,
             "estorno": {
-                k: (datetime.now().isoformat() if k == "timestamp_criacao" else v)
+                k: (_now_sp().isoformat() if k == "timestamp_criacao" else v)
                 for k, v in payload.items()
                 if k != "imutavel"
             },
@@ -1033,7 +1065,7 @@ def ajustes_buscar_por_valor():
 @app.route('/extrato/hoje', methods=['GET'])
 def extrato_hoje():
     """Retorna extrato do dia atual."""
-    data_atual = datetime.now().strftime("%Y-%m-%d")
+    data_atual = _day_key_sp()
     try:
         db = get_db()
         cliente_id = str(request.args.get("cliente_id") or "default")
@@ -1156,7 +1188,7 @@ def extrato_hoje():
 def total_mes():
     """Retorna totais do mês atual ou do mês fornecido."""
     mes_qs = request.args.get("mes")
-    mes_atual = mes_qs or datetime.now().strftime("%Y-%m")
+    mes_atual = mes_qs or _month_key_sp()
     total_despesas = 0
     total_receitas = 0
     quantidade_transacoes_validas = 0
@@ -1298,7 +1330,7 @@ def total_mes():
 @app.route('/categorias/mes', methods=['GET'])
 def categorias_mes():
     mes_qs = request.args.get("mes")
-    mes_atual = mes_qs or datetime.now().strftime("%Y-%m")
+    mes_atual = mes_qs or _month_key_sp()
     categorias = {}
     total_despesas = 0
     categorias_estorno = {}
@@ -1509,7 +1541,7 @@ def categorias_mes():
 
 @app.route('/total/semana', methods=['GET'])
 def total_semana():
-    hoje = datetime.now()
+    hoje = _now_sp()
     inicio_semana = hoje - timedelta(days=hoje.weekday())
     total_despesas = 0
     total_receitas = 0
@@ -1642,7 +1674,7 @@ def recompute_cliente():
         res = recompute_cliente_aggregates(cliente_id)
         db = get_db()
         root = db.collection('clientes').document(cliente_id)
-        mes_atual = datetime.now().strftime("%Y-%m")
+        mes_atual = _month_key_sp()
         mm = root.collection('meses').document(mes_atual).get().to_dict() or {}
         total = {
             "despesas": float(mm.get("total_saida", 0) or 0),
@@ -2084,13 +2116,13 @@ def health():
     """Endpoint de saúde da API."""
     return jsonify({
         "status": "online",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": _now_sp().isoformat(),
         "servico": "API Financeira"
     })
 @app.route('/health/consistency', methods=['GET'])
 def health_consistency():
-    hoje = datetime.now().strftime("%Y-%m-%d")
-    mes_atual = datetime.now().strftime("%Y-%m")
+    hoje = _day_key_sp()
+    mes_atual = _month_key_sp()
     try:
         db = get_db()
         cliente_id = str(request.args.get("cliente_id") or "default")
