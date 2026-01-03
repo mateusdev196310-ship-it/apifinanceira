@@ -115,20 +115,53 @@ class AudioProcessor:
                 return None
             with wave.open(wav_path, "rb") as wf:
                 rate = wf.getframerate()
+                try:
+                    print("[audio_processor] vosk_start", rate, wav_path)
+                except:
+                    pass
                 rec = KaldiRecognizer(mdl, rate)
+                segments = []
+                last_partial = ""
                 while True:
                     data = wf.readframes(4000)
                     if not data:
                         break
-                    rec.AcceptWaveform(data)
+                    if rec.AcceptWaveform(data):
+                        try:
+                            r_seg = rec.Result()
+                            j_seg = json.loads(r_seg or "{}")
+                            tx_seg = str(j_seg.get("text") or "").strip()
+                            if tx_seg:
+                                segments.append(tx_seg)
+                        except:
+                            pass
+                    else:
+                        try:
+                            pr = rec.PartialResult()
+                            j_pr = json.loads(pr or "{}")
+                            p = str(j_pr.get("partial") or "").strip()
+                            if p:
+                                last_partial = p
+                        except:
+                            pass
                 r = rec.FinalResult()
+                txt_final = ""
                 try:
                     j = json.loads(r or "{}")
-                    tx = str(j.get("text") or "").strip()
-                    if tx:
-                        return tx
-                except Exception:
-                    return None
+                    txt_final = str(j.get("text") or "").strip()
+                except:
+                    txt_final = ""
+                if txt_final:
+                    segments.append(txt_final)
+                out = " ".join([s for s in segments if s]).strip()
+                if not out and last_partial:
+                    out = last_partial.strip()
+                try:
+                    print("[audio_processor] vosk_done_len", len(out))
+                except:
+                    pass
+                if out:
+                    return out
             return None
         except Exception:
             return None
@@ -214,6 +247,10 @@ class AudioProcessor:
     
     def transcribe_audio_file(self, audio_bytes, format='ogg'):
         try:
+            try:
+                print("[audio_processor] transcribe_input_format", format)
+            except:
+                pass
             if format == 'wav':
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                     tmp_file.write(audio_bytes)
@@ -241,8 +278,16 @@ class AudioProcessor:
                             except Exception:
                                 vtxt0 = None
                             if vtxt0:
+                                try:
+                                    print("[audio_processor] vosk_ok_len", len(vtxt0))
+                                except:
+                                    pass
                                 return vtxt0
                         if texto:
+                            try:
+                                print("[audio_processor] google_ok_len", len(texto))
+                            except:
+                                pass
                             return texto
                 except:
                     pass
@@ -252,6 +297,10 @@ class AudioProcessor:
                     except:
                         pass
                 t_ai = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
+                try:
+                    print("[audio_processor] gemini_len", len(t_ai or ""))
+                except:
+                    pass
                 return t_ai if t_ai else None
             if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg', 'm4a', 'aac'):
                 ff = self._get_ffmpeg_exe()
@@ -285,12 +334,20 @@ class AudioProcessor:
                                     except:
                                         texto = None
                                 if texto:
+                                    try:
+                                        print("[audio_processor] google_ok_len", len(texto))
+                                    except:
+                                        pass
                                     return texto
                         try:
                             vtxt = self.transcribe_wav_with_vosk(out_path)
                         except Exception:
                             vtxt = None
                         if vtxt:
+                            try:
+                                print("[audio_processor] vosk_ok_len", len(vtxt))
+                            except:
+                                pass
                             return vtxt
                         # segunda tentativa: converter para 8000 Hz
                         out_path2 = out_path.replace('.wav', '.8k.wav')
@@ -313,12 +370,20 @@ class AudioProcessor:
                                         except:
                                             texto2 = None
                                     if texto2:
+                                        try:
+                                            print("[audio_processor] google_ok_len", len(texto2))
+                                        except:
+                                            pass
                                         return texto2
                             try:
                                 vtxt2 = self.transcribe_wav_with_vosk(out_path2)
                             except Exception:
                                 vtxt2 = None
                             if vtxt2:
+                                try:
+                                    print("[audio_processor] vosk_ok_len", len(vtxt2))
+                                except:
+                                    pass
                                 return vtxt2
                         except:
                             pass
@@ -347,11 +412,19 @@ class AudioProcessor:
                     mime = 'audio/mpeg'
                 t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
                 if t_ai:
+                    try:
+                        print("[audio_processor] gemini_len", len(t_ai or ""))
+                    except:
+                        pass
                     return t_ai
                 return None
             mime = 'audio/ogg' if format == 'ogg' else 'audio/mpeg'
             t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
             if t_ai:
+                try:
+                    print("[audio_processor] gemini_len", len(t_ai or ""))
+                except:
+                    pass
                 return t_ai
             return None
         except Exception:
