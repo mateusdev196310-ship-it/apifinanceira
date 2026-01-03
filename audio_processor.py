@@ -252,6 +252,13 @@ class AudioProcessor:
             except:
                 pass
             if format == 'wav':
+                t_ai0 = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
+                try:
+                    print("[audio_processor] gemini_len", len(t_ai0 or ""))
+                except:
+                    pass
+                if t_ai0:
+                    return t_ai0
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                     tmp_file.write(audio_bytes)
                     temp_path = tmp_file.name
@@ -296,13 +303,25 @@ class AudioProcessor:
                         os.remove(temp_path)
                     except:
                         pass
-                t_ai = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
-                try:
-                    print("[audio_processor] gemini_len", len(t_ai or ""))
-                except:
-                    pass
-                return t_ai if t_ai else None
+                return None
             if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg', 'm4a', 'aac'):
+                if format in ('ogg', 'oga', 'opus'):
+                    mime0 = 'audio/ogg'
+                elif format in ('mp3', 'mpeg'):
+                    mime0 = 'audio/mpeg'
+                elif format == 'm4a':
+                    mime0 = 'audio/mp4'
+                elif format == 'aac':
+                    mime0 = 'audio/aac'
+                else:
+                    mime0 = 'audio/mpeg'
+                t_ai1 = self.transcribe_audio_bytes(audio_bytes, mime0)
+                if t_ai1:
+                    try:
+                        print("[audio_processor] gemini_len", len(t_ai1 or ""))
+                    except:
+                        pass
+                    return t_ai1
                 ff = self._get_ffmpeg_exe()
                 if ff:
                     ext = 'mp3' if format == 'mpeg' else format
@@ -410,22 +429,7 @@ class AudioProcessor:
                     mime = 'audio/aac'
                 else:
                     mime = 'audio/mpeg'
-                t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
-                if t_ai:
-                    try:
-                        print("[audio_processor] gemini_len", len(t_ai or ""))
-                    except:
-                        pass
-                    return t_ai
                 return None
-            mime = 'audio/ogg' if format == 'ogg' else 'audio/mpeg'
-            t_ai = self.transcribe_audio_bytes(audio_bytes, mime)
-            if t_ai:
-                try:
-                    print("[audio_processor] gemini_len", len(t_ai or ""))
-                except:
-                    pass
-                return t_ai
             return None
         except Exception:
             return None
