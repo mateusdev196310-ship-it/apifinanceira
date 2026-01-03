@@ -43,9 +43,42 @@ _BOT_LOCK_ACQUIRED = False
 def _acquire_bot_lock():
     global _BOT_LOCK_ACQUIRED
     try:
-        if os.getenv("BOT_FORCE_RUN"):
+        if os.getenv("BOT_FORCE_RUN") or os.getenv("BOT_DISABLE_LOCK"):
             _BOT_LOCK_ACQUIRED = True
             return True
+        ttl = int(os.getenv("BOT_LOCK_TTL") or "900")
+        if os.path.exists(_BOT_LOCK_PATH):
+            try:
+                st = os.stat(_BOT_LOCK_PATH)
+                age = int(_now_ts() - st.st_mtime)
+                if age > ttl:
+                    os.remove(_BOT_LOCK_PATH)
+                else:
+                    pid = None
+                    try:
+                        with open(_BOT_LOCK_PATH, "r", encoding="utf-8") as f2:
+                            pid = int(str(f2.read()).strip() or "0")
+                    except:
+                        pid = None
+                    alive = False
+                    if pid and pid > 0:
+                        try:
+                            os.kill(pid, 0)
+                            alive = True
+                        except:
+                            alive = False
+                    if alive:
+                        return False
+                    else:
+                        try:
+                            os.remove(_BOT_LOCK_PATH)
+                        except:
+                            pass
+            except:
+                try:
+                    os.remove(_BOT_LOCK_PATH)
+                except:
+                    pass
         f = open(_BOT_LOCK_PATH, "x")
         try:
             f.write(str(os.getpid()))
