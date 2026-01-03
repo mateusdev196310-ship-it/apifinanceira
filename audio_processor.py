@@ -254,11 +254,7 @@ class AudioProcessor:
                 t_ai = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
                 return t_ai if t_ai else None
             if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg', 'm4a', 'aac'):
-                try:
-                    from imageio_ffmpeg import get_ffmpeg_exe
-                    ff = get_ffmpeg_exe()
-                except:
-                    ff = shutil.which('ffmpeg') or shutil.which('avconv')
+                ff = self._get_ffmpeg_exe()
                 if ff:
                     ext = 'mp3' if format == 'mpeg' else format
                     with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as in_file:
@@ -365,6 +361,55 @@ class AudioProcessor:
 
 # Instância global
 audio_processor = AudioProcessor()
+
+def _ffmpeg_urls():
+    return [
+        "https://github.com/imageio/imageio-ffmpeg/releases/download/0.4.8/ffmpeg-win64-v4.2.2.exe",
+        "https://github.com/imageio/imageio-ffmpeg/releases/download/0.4.9/ffmpeg-win64-v4.2.2.exe",
+    ]
+
+def _ensure_ffmpeg_local():
+    try:
+        base_dir = os.path.join(os.getcwd(), "models")
+        os.makedirs(base_dir, exist_ok=True)
+        target = os.path.join(base_dir, "ffmpeg.exe")
+        if os.path.isfile(target):
+            return target
+        if _req is None:
+            return None
+        for u in _ffmpeg_urls():
+            try:
+                r = _req.get(u, timeout=30)
+                if getattr(r, "ok", False):
+                    with open(target, "wb") as f:
+                        f.write(r.content)
+                    try:
+                        os.chmod(target, 0o755)
+                    except:
+                        pass
+                    return target
+            except:
+                continue
+        return None
+    except:
+        return None
+
+def _get_ffmpeg_exe_global():
+    try:
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+            return get_ffmpeg_exe()
+        except Exception:
+            pass
+        p = shutil.which('ffmpeg') or shutil.which('avconv')
+        if p:
+            return p
+        local = _ensure_ffmpeg_local()
+        return local
+    except:
+        return None
+
+AudioProcessor._get_ffmpeg_exe = staticmethod(_get_ffmpeg_exe_global)
 
 def testar_transcricao():
     """Teste simples da transcrição."""
