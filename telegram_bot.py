@@ -13,6 +13,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from app.config import TELEGRAM_BOT_TOKEN, api_url
 from urllib.parse import quote_plus
 from types import SimpleNamespace
+import atexit
+import tempfile
 from app.utils.formatting import (
     formatar_moeda,
     criar_linha_tabela,
@@ -29,6 +31,39 @@ try:
     from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
+_TZ_SP = None
+try:
+    if ZoneInfo is not None:
+        _TZ_SP = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    _TZ_SP = None
+_BOT_LOCK_PATH = os.path.join(os.getcwd(), ".bot.lock")
+_BOT_LOCK_ACQUIRED = False
+def _acquire_bot_lock():
+    global _BOT_LOCK_ACQUIRED
+    try:
+        if os.getenv("BOT_FORCE_RUN"):
+            _BOT_LOCK_ACQUIRED = True
+            return True
+        f = open(_BOT_LOCK_PATH, "x")
+        try:
+            f.write(str(os.getpid()))
+            f.flush()
+        except:
+            pass
+        _BOT_LOCK_ACQUIRED = True
+        return True
+    except:
+        return False
+def _release_bot_lock():
+    global _BOT_LOCK_ACQUIRED
+    try:
+        if _BOT_LOCK_ACQUIRED and os.path.exists(_BOT_LOCK_PATH):
+            os.remove(_BOT_LOCK_PATH)
+        _BOT_LOCK_ACQUIRED = False
+    except:
+        pass
+atexit.register(_release_bot_lock)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -424,6 +459,9 @@ def formatar_data_hora_local(ts_raw):
         dt = datetime.fromisoformat(st)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
+        tz = _TZ_SP
+        if tz is not None:
+            return dt.astimezone(tz).strftime('%Y-%m-%d %H:%M')
         return dt.astimezone().strftime('%Y-%m-%d %H:%M')
     except:
         try:
@@ -659,7 +697,10 @@ def _mes_key_from_text(texto: str) -> str:
         "maio": "05", "junho": "06", "julho": "07", "agosto": "08", "setembro": "09",
         "outubro": "10", "novembro": "11", "dezembro": "12"
     }
-    now = datetime.now()
+    try:
+        now = datetime.now(_TZ_SP) if _TZ_SP is not None else datetime.now()
+    except:
+        now = datetime.now()
     if re.search(r'\b(este|esse|neste)\s+m[êe]s\b', t):
         return now.strftime("%Y-%m")
     if re.search(r'\b(pr[óo]ximo)\s+m[êe]s\b', t):
@@ -1507,7 +1548,10 @@ async def relatorio_diario(query, context):
 # ===== ANÁLISE MENSAL =====
 async def analise_mensal(query, context):
     """Gera análise mensal detalhada."""
-    hoje = datetime.now()
+    try:
+        hoje = datetime.now(_TZ_SP) if _TZ_SP is not None else datetime.now()
+    except:
+        hoje = datetime.now()
     data_str = hoje.strftime("%B/%Y").title()
     dias_no_mes = calendar.monthrange(hoje.year, hoje.month)[1]
     dias_decorridos = hoje.day
@@ -2862,6 +2906,9 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
 # ===== MAIN =====
 def main() -> None:
     """Inicia o bot formatado."""
+    if not _acquire_bot_lock():
+        print("⚠️ Outra instância do bot está em execução. Encerrando.")
+        return
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).concurrent_updates(32).build()
     
     # Handlers de comandos

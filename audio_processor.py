@@ -284,15 +284,14 @@ class AudioProcessor:
                                             texto = self.recognizer.recognize_google(a2, language='pt-BR', show_all=False)
                                     except:
                                         texto = None
-                                if not texto:
-                                    try:
-                                        vtxt = self.transcribe_wav_with_vosk(out_path)
-                                    except Exception:
-                                        vtxt = None
-                                    if vtxt:
-                                        return vtxt
                                 if texto:
                                     return texto
+                        try:
+                            vtxt = self.transcribe_wav_with_vosk(out_path)
+                        except Exception:
+                            vtxt = None
+                        if vtxt:
+                            return vtxt
                         # segunda tentativa: converter para 8000 Hz
                         out_path2 = out_path.replace('.wav', '.8k.wav')
                         try:
@@ -313,15 +312,14 @@ class AudioProcessor:
                                                 texto2 = self.recognizer.recognize_google(a3, language='pt-BR', show_all=False)
                                         except:
                                             texto2 = None
-                                    if not texto2:
-                                        try:
-                                            vtxt2 = self.transcribe_wav_with_vosk(out_path2)
-                                        except Exception:
-                                            vtxt2 = None
-                                        if vtxt2:
-                                            return vtxt2
                                     if texto2:
                                         return texto2
+                            try:
+                                vtxt2 = self.transcribe_wav_with_vosk(out_path2)
+                            except Exception:
+                                vtxt2 = None
+                            if vtxt2:
+                                return vtxt2
                         except:
                             pass
                     except:
