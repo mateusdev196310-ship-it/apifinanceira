@@ -2045,7 +2045,7 @@ async def comando_estornar(update: Update, context: CallbackContext) -> None:
                     await update.message.reply_text("⚠️ Informe um valor válido para estornar.", parse_mode='Markdown')
                     return
                 if not dr:
-            dr = _day_key_sp()
+                    dr = _day_key_sp()
                 await iniciar_fluxo_estorno_por_valor(update, context, v, dr, tipo=tipo, processamento=None)
                 return
             payload = {
