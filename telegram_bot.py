@@ -2239,7 +2239,7 @@ async def _menu_debitos(obj, context):
     if not meses:
         hoje = _now_sp()
         for n in (-1, 0, 1):
-        mk = _add_months(hoje, n).strftime("%Y-%m")
+            mk = _add_months(hoje, n).strftime("%Y-%m")
             meses.append(mk)
     rows = []
     for mk in meses:
@@ -2266,7 +2266,7 @@ async def _menu_projetados(obj, context):
     if not meses:
         hoje = _now_sp()
         for n in (0, 1, 2):
-        mk = _add_months(hoje, n).strftime("%Y-%m")
+            mk = _add_months(hoje, n).strftime("%Y-%m")
             meses.append(mk)
     rows = []
     for mk in meses:
