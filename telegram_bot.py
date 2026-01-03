@@ -75,6 +75,29 @@ async def _req_json_cached_async(url, key, ttl=15, timeout=4):
     _cache_set(key, d, ttl)
     return d
 
+def _now_sp():
+    try:
+        now_utc = datetime.now(timezone.utc)
+        try:
+            tz = ZoneInfo("America/Sao_Paulo") if ZoneInfo else None
+        except Exception:
+            tz = None
+        return now_utc.astimezone(tz) if tz is not None else (now_utc + timedelta(hours=-3))
+    except:
+        return datetime.now()
+
+def _day_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m-%d")
+    except:
+        return datetime.now().strftime("%Y-%m-%d")
+
+def _month_key_sp():
+    try:
+        return _now_sp().strftime("%Y-%m")
+    except:
+        return datetime.now().strftime("%Y-%m")
+
 _BG_LIMIT = int(os.getenv("BOT_MAX_CONCURRENCY", "2") or "2")
 _bg_semaphore = asyncio.Semaphore(_BG_LIMIT if _BG_LIMIT > 0 else 1)
 async def _post_json_async(url, payload=None, timeout=10):
@@ -92,14 +115,14 @@ async def _post_json_async(url, payload=None, timeout=10):
 
 async def mini_report(cliente_id: str, cliente_nome: str = None, username: str = None):
     try:
-        dkey = datetime.now().strftime("%Y-%m-%d")
-        mkey = datetime.now().strftime("%Y-%m")
+        dkey = _day_key_sp()
+        mkey = _month_key_sp()
         qs = f"cliente_id={quote_plus(str(cliente_id))}"
         if cliente_nome:
             qs += f"&cliente_nome={quote_plus(str(cliente_nome))}"
         if username:
             qs += f"&username={quote_plus(str(username))}"
-        day_url = f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}"
+        day_url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&{qs}"
         month_url = f"{API_URL}/saldo/atual?mes={mkey}&{qs}"
         geral_url = f"{API_URL}/saldo/atual?{qs}"
         day_api, month_api, geral_api = await asyncio.gather(
@@ -195,14 +218,14 @@ async def _periodic_lembrete(application, interval_seconds: int = 60):
             break
 def mini_report_sync(cliente_id: str, cliente_nome: str = None, username: str = None):
     try:
-        dkey = datetime.now().strftime("%Y-%m-%d")
-        mkey = datetime.now().strftime("%Y-%m")
+        dkey = _day_key_sp()
+        mkey = _month_key_sp()
         qs = f"cliente_id={quote_plus(str(cliente_id))}"
         if cliente_nome:
             qs += f"&cliente_nome={quote_plus(str(cliente_nome))}"
         if username:
             qs += f"&username={quote_plus(str(username))}"
-        day_url = f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}"
+        day_url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&{qs}"
         month_url = f"{API_URL}/saldo/atual?mes={mkey}&{qs}"
         geral_url = f"{API_URL}/saldo/atual?{qs}"
         day_api = _req_json_cached(day_url, f"day:{cliente_id}:{dkey}", ttl=10, timeout=4)
@@ -968,7 +991,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
 # ===== RELATÓRIO DE TOTAIS DO DIA (/total) =====
 async def relatorio_total(query, context):
     """Gera relatório de totais acumulados do DIA ATUAL."""
-    data_atual = datetime.now()
+    data_atual = _now_sp()
     data_str = data_atual.strftime("%d/%m/%Y")
     
     processing_msg = None
@@ -981,8 +1004,8 @@ async def relatorio_total(query, context):
         processing_msg = None
     try:
         cid = get_cliente_id(query)
-        dkey = datetime.now().strftime("%Y-%m-%d")
-        mkey = datetime.now().strftime("%Y-%m")
+        dkey = _day_key_sp()
+        mkey = _month_key_sp()
         day_url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&{build_cliente_query_params(query)}"
         month_url = f"{API_URL}/saldo/atual?mes={mkey}&{build_cliente_query_params(query)}"
         geral_url = f"{API_URL}/total/geral?{build_cliente_query_params(query)}"
@@ -1113,7 +1136,7 @@ async def relatorio_total(query, context):
 # ===== RESUMO FINANCEIRO (/resumo) =====
 async def resumo_financeiro(query, context):
     """Gera resumo financeiro COMPLETO com DIA vs MÊS."""
-    hoje = datetime.now()
+    hoje = _now_sp()
     data_str = hoje.strftime("%d/%m/%Y")
     processing_msg = None
     try:
@@ -1878,7 +1901,7 @@ async def extrato_detalhado(query, context):
     try:
         cid = get_cliente_id(query)
         qs = build_cliente_query_params(query)
-        mk = datetime.now().strftime("%Y-%m")
+        mk = _month_key_sp()
         url_dia = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
         url_mes = f"{API_URL}/saldo/atual?mes={mk}&{qs}"
         url_geral = f"{API_URL}/saldo/atual?{qs}"

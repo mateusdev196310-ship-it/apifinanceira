@@ -10,6 +10,12 @@ from google.genai import types
 import time
 import subprocess
 import shutil
+import zipfile
+import io
+try:
+    import requests as _req
+except Exception:
+    _req = None
 try:
     from vosk import Model, KaldiRecognizer
 except Exception:
@@ -53,12 +59,54 @@ class AudioProcessor:
             if Model is None:
                 return None
             p = self._vosk_model_path()
+            if not p or not os.path.isdir(p):
+                try:
+                    self._ensure_vosk_model()
+                    p = self._vosk_model_path()
+                except Exception:
+                    p = self._vosk_model_path()
             if p and os.path.isdir(p):
-                self._vosk_model = Model(p)
-                return self._vosk_model
+                try:
+                    self._vosk_model = Model(p)
+                    return self._vosk_model
+                except Exception:
+                    return None
             return None
         except Exception:
             return None
+    
+    def _ensure_vosk_model(self):
+        try:
+            base_dir = os.path.join(os.getcwd(), "models")
+            target_dir = os.path.join(base_dir, "vosk-model-small-pt-0.3")
+            if os.path.isdir(target_dir):
+                return
+            if _req is None:
+                return
+            os.makedirs(base_dir, exist_ok=True)
+            urls = [
+                "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
+                "https://model.vosk.dev/vosk-model-small-pt-0.3.zip",
+            ]
+            data = None
+            for u in urls:
+                try:
+                    r = _req.get(u, timeout=30)
+                    if getattr(r, "ok", False):
+                        data = r.content
+                        break
+                except:
+                    continue
+            if not data:
+                return
+            try:
+                buf = io.BytesIO(data)
+                with zipfile.ZipFile(buf) as zf:
+                    zf.extractall(base_dir)
+            except Exception:
+                return
+        except Exception:
+            return
     
     def transcribe_wav_with_vosk(self, wav_path):
         try:
