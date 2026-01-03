@@ -3373,8 +3373,8 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
 async def processar_mensagem_voz(update: Update, context: CallbackContext):
     msg = update.message
     processing_msg = await msg.reply_text("🔄 Processando áudio (voz)...")
+    await _bg_semaphore.acquire()
     try:
-        await _bg_semaphore.acquire()
         v = msg.voice
         if not v:
             await context.bot.edit_message_text(
@@ -3383,7 +3383,6 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                 text="⚠️ Nenhuma mensagem de voz recebida.",
                 parse_mode='Markdown'
             )
-            _bg_semaphore.release()
             return
         arquivo = await context.bot.get_file(v.file_id)
         audio_bytes = b""
@@ -3405,24 +3404,27 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                 text="⚠️ Erro ao baixar o áudio.",
                 parse_mode='Markdown'
             )
-            _bg_semaphore.release()
             return
         from audio_processor import audio_processor
         texto = await asyncio.to_thread(audio_processor.transcribe_audio_file, audio_bytes, format='ogg')
         if not texto:
-            await context.bot.edit_message_text(
-                chat_id=processing_msg.chat_id,
-                message_id=processing_msg.message_id,
-                text="Não consegui transcrever o áudio de voz. Envie como ÁUDIO (MP3/WAV) ou tente novamente.",
-                parse_mode='Markdown'
-            )
-            _bg_semaphore.release()
+            try:
+                err_msg = "Não consegui transcrever o áudio de voz. Envie como ÁUDIO (MP3/WAV) ou tente novamente."
+                if getattr(audio_processor, "rate_limited", False):
+                    err_msg = "Não consegui transcrever agora (cota de IA atingida). Envie como texto ou como ÁUDIO (MP3/WAV) e tente novamente em alguns minutos."
+                await context.bot.edit_message_text(
+                    chat_id=processing_msg.chat_id,
+                    message_id=processing_msg.message_id,
+                    text=err_msg,
+                    parse_mode='Markdown'
+                )
+            except:
+                pass
             return
         if re.search(r'\bestornar\b', texto, re.IGNORECASE):
             v, dr, tipo = extrair_campos_estorno(texto)
             if v and dr:
                 await iniciar_fluxo_estorno_por_valor(update, context, v, dr, tipo=tipo, processamento=processing_msg)
-                _bg_semaphore.release()
                 return
         try:
             data = await _post_json_async(
@@ -3562,23 +3564,23 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             except:
                 pass
         asyncio.create_task(_enviar_totais_audio())
-        _bg_semaphore.release()
     except:
-        try:
-            _bg_semaphore.release()
-        except:
-            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
             text="⚠️ *Erro ao processar áudio. Tente novamente.*",
             parse_mode='Markdown'
         )
+    finally:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass
 async def processar_mensagem_audio(update: Update, context: CallbackContext):
     msg = update.message
     processing_msg = await msg.reply_text("🔄 Processando áudio...")
+    await _bg_semaphore.acquire()
     try:
-        await _bg_semaphore.acquire()
         a = msg.audio
         if not a:
             await context.bot.edit_message_text(
@@ -3587,7 +3589,6 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                 text="⚠️ Nenhum áudio recebido.",
                 parse_mode='Markdown'
             )
-            _bg_semaphore.release()
             return
         arquivo = await context.bot.get_file(a.file_id)
         audio_bytes = b""
@@ -3609,7 +3610,6 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                 text="⚠️ Erro ao baixar o áudio.",
                 parse_mode='Markdown'
             )
-            _bg_semaphore.release()
             return
         mt = str(a.mime_type or '').lower()
         fn = str(a.file_name or '').lower()
@@ -3626,19 +3626,23 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
         from audio_processor import audio_processor
         texto = await asyncio.to_thread(audio_processor.transcribe_audio_file, audio_bytes, format=fmt)
         if not texto:
-            await context.bot.edit_message_text(
-                chat_id=processing_msg.chat_id,
-                message_id=processing_msg.message_id,
-                text="Não consegui transcrever o áudio.",
-                parse_mode='Markdown'
-            )
-            _bg_semaphore.release()
+            try:
+                err_msg = "Não consegui transcrever o áudio."
+                if getattr(audio_processor, "rate_limited", False):
+                    err_msg = "Não consegui transcrever agora (cota de IA atingida). Envie como texto ou como ÁUDIO (MP3/WAV) e tente novamente em alguns minutos."
+                await context.bot.edit_message_text(
+                    chat_id=processing_msg.chat_id,
+                    message_id=processing_msg.message_id,
+                    text=err_msg,
+                    parse_mode='Markdown'
+                )
+            except:
+                pass
             return
         if re.search(r'\bestornar\b', texto, re.IGNORECASE):
             v, dr, tipo = extrair_campos_estorno(texto)
             if v and dr:
                 await iniciar_fluxo_estorno_por_valor(update, context, v, dr, tipo=tipo, processamento=processing_msg)
-                _bg_semaphore.release()
                 return
         try:
             data = await _post_json_async(
@@ -3778,15 +3782,15 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             except:
                 pass
         asyncio.create_task(_enviar_totais_audio2())
-        _bg_semaphore.release()
     except:
-        try:
-            _bg_semaphore.release()
-        except:
-            pass
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
             text="⚠️ *Erro ao processar áudio. Tente novamente.*",
             parse_mode='Markdown'
         )
+    finally:
+        try:
+            _bg_semaphore.release()
+        except:
+            pass

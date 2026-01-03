@@ -5,7 +5,7 @@ except Exception:
     sr = None
 import os
 import tempfile
-from app.services.gemini import get_client
+from app.services.gemini import get_client, set_cooldown
 from google.genai import types
 import time
 import subprocess
@@ -27,6 +27,7 @@ class AudioProcessor:
         except Exception:
             self.recognizer = None
         self._vosk_model = None
+        self.rate_limited = False
     
     def _vosk_model_path(self):
         try:
@@ -95,29 +96,33 @@ class AudioProcessor:
                 parts = [types.Part(text="Transcreva o áudio para texto em português do Brasil. Retorne apenas o texto transcrito.")]
                 parts.append(types.Part(inline_data=blob))
                 contents = [types.Content(role='user', parts=parts)]
-                models = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-1.5-flash', 'gemini-1.5-pro']
-                delays = [0.8, 1.5, 2.5, 3.0, 3.5]
-                for i, mdl in enumerate(models):
-                    try:
-                        resp = client.models.generate_content(
-                            model=mdl,
-                            contents=contents,
-                            config=types.GenerateContentConfig(
-                                temperature=0.0,
-                                max_output_tokens=800,
-                            ),
-                        )
-                        texto = (resp.text or "").strip()
-                        if texto:
-                            return texto
-                    except Exception as e:
-                        msg = str(e) if e else ""
-                        if "RESOURCE_EXHAUSTED" in msg or "429" in msg or "Too Many Requests" in msg:
-                            time.sleep(delays[i] if i < len(delays) else 1.0)
-                            continue
-                        if "404" in msg or "Not Found" in msg:
-                            continue
-                        continue
+                try:
+                    resp = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            temperature=0.0,
+                            max_output_tokens=800,
+                        ),
+                    )
+                    texto = (resp.text or "").strip()
+                    if texto:
+                        self.rate_limited = False
+                        return texto
+                except Exception as e:
+                    msg = str(e) if e else ""
+                    if ("RESOURCE_EXHAUSTED" in msg) or ("429" in msg) or ("Too Many Requests" in msg):
+                        try:
+                            set_cooldown(int(os.getenv("GEMINI_COOLDOWN_SECONDS", "900") or "900"))
+                        except:
+                            set_cooldown(900)
+                        self.rate_limited = True
+                        return None
+                    if ("404" in msg) or ("Not Found" in msg):
+                        self.rate_limited = False
+                        return None
+                    self.rate_limited = False
+                    return None
             return None
         except:
             return None
