@@ -460,7 +460,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
         v0 = _best_valor(tl0)
         if v0 is not None:
             tipo0 = '0'
-            if 'receb' in tl0 or 'pix recebido' in tl0 or 'credito na conta' in tl0 or 'crédito na conta' in tl0 or 'deposito' in tl0 or 'depósito' in tl0:
+            if re.search(r'\b(recebi|recebido|recebimento)\b', tl0, re.IGNORECASE) or 'pix recebido' in tl0 or 'credito na conta' in tl0 or 'crédito na conta' in tl0 or 'deposito' in tl0 or 'depósito' in tl0:
                 tipo0 = '1'
             cat0 = detect_category(clean_desc(tl0))
             if tipo0 == '0' and cat0 == 'vendas':
@@ -743,7 +743,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             return []
         valor = float(best)
         tipo = '0'
-        if 'receb' in tl or 'pix recebido' in tl or 'credito na conta' in tl or 'crédito na conta' in tl or 'deposito' in tl or 'depósito' in tl:
+        if re.search(r'\b(recebi|recebido|recebimento)\b', tl, re.IGNORECASE) or 'pix recebido' in tl or 'credito na conta' in tl or 'crédito na conta' in tl or 'deposito' in tl or 'depósito' in tl:
             tipo = '1'
         cat = detect_category(clean_desc(tl))
         if tipo == '0' and cat == 'vendas':

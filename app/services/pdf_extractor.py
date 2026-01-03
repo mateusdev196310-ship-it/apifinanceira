@@ -132,8 +132,8 @@ def extract_text_from_pdf(path: Optional[str] = None, data: Optional[bytes] = No
 
 _PDF_SKIP_LINE = re.compile(r'(?i)\b(saldo|totais?|limite|fatura|vencimento|vence\s+em|cnpj|cpf|nota\s*fiscal|nf[\- ]?e|emitente|endere[cç]o|endereço|cliente|resumo|inform[aã]coes|informações|parcelamento|juros|multa|tarifas?|encargos?|pagamento m[ií]nimo|total a pagar|saque total|fatura atual|emitido|pagamentos?\\s+e\\s+cr[eé]ditos?|cart[aã]o\\s+visa|visa)\b')
 _AMOUNT_RE = re.compile(r'(?:R?\$?\s*)?(\(?-?\s*\)?)?(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+[.,]\d{2}|\d+)(?=\D|$)')
-_INCOME_HINT = re.compile(r'(?i)\b(pix|recebido|credito|cr[eé]dito|dep[óo]sito|entrada|sal[áa]rio|transfer[eê]ncia|recebi)\b')
-_EXPENSE_HINT = re.compile(r'(?i)\b(d[eé]bito|debito|compra|pagamento|fatura|boleto|saque|tarifa|juros|servi[cç]o|assinatura|mensalidade|lan[cç]amento)\b')
+_INCOME_HINT = re.compile(r'(?i)\b(recebi|recebido|recebimento|credito|cr[eé]dito|dep[óo]sito|entrada|sal[áa]rio|pix\\s+recebido|transfer[eê]ncia\\s+recebida)\b')
+_EXPENSE_HINT = re.compile(r'(?i)\b(d[eé]bito|debito|compra|pagamento|fatura|boleto|saque|tarifa|juros|servi[cç]o|assinatura|mensalidade|lan[cç]amento|pix\\s+enviado|pix\\s+para|transfer[eê]ncia)\b')
 def parse_pdf_text_to_transactions(text: str) -> List[Dict]:
     out = []
     if not text or len(text) < 10:
