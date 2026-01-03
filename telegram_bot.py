@@ -27,6 +27,7 @@ from app.services.rule_based import parse_text_to_transactions, clean_desc, natu
 from app.services.image_extractor import extrair_informacoes_da_imagem
 from app.services.database import salvar_transacao_cliente, ensure_cliente, get_db, firestore
 from time import time as _now_ts
+from app.services.gemini import is_available as _gemini_ok
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -2741,7 +2742,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                         return True
                     return False
                 precisa_ai = any(_desc_confusa(str(it.get('descricao', ''))) for it in transacoes)
-                if precisa_ai:
+                if precisa_ai and _gemini_ok():
                     from app.services.extractor import extrair_informacoes_financeiras
                     ai_trans = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
                     transacoes = (transacoes or []) + ai_trans
@@ -2759,7 +2760,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             else:
                 try:
                     from app.services.extractor import extrair_informacoes_financeiras
-                    transacoes = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
+                    transacoes = (await asyncio.to_thread(extrair_informacoes_financeiras, texto)) if _gemini_ok() else []
                 except:
                     transacoes = []
                 arq = None
@@ -3505,7 +3506,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                     "cliente_nome": get_cliente_nome(update),
                     "username": get_cliente_username(update),
                 },
-                timeout=10
+                timeout=6
             )
         except:
             data = {"sucesso": False}
@@ -3525,7 +3526,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
         if not transacoes:
             try:
                 from app.services.extractor import extrair_informacoes_financeiras
-                transacoes = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
+                transacoes = (await asyncio.to_thread(extrair_informacoes_financeiras, texto)) if _gemini_ok() else []
             except:
                 transacoes = []
         if transacoes:
@@ -3543,7 +3544,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                         return True
                     return False
                 precisa_ai = any(_desc_confusa(str(it.get('descricao', ''))) for it in transacoes)
-                if precisa_ai:
+                if precisa_ai and _gemini_ok():
                     from app.services.extractor import extrair_informacoes_financeiras
                     ai_trans = extrair_informacoes_financeiras(texto) or []
                     transacoes = (transacoes or []) + ai_trans
