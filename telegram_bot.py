@@ -597,7 +597,68 @@ async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
                  InlineKeyboardButton("❌ Não", callback_data=f"cat_no:{rid}:{cat}")]
             ])
             try:
-                await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode='Markdown', reply_markup=kb)
+                m = await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode='Markdown', reply_markup=kb)
+                try:
+                    pend = context.user_data.get("pending_confirmations") or {}
+                    pend[rid] = {"chat_id": m.chat_id, "message_id": m.message_id, "ref_id": rid, "categoria": cat, "tipo": tp_txt}
+                    context.user_data["pending_confirmations"] = pend
+                except:
+                    pass
+                async def _auto_timeout():
+                    try:
+                        import asyncio as _a
+                        await _a.sleep(60)
+                        pend2 = context.user_data.get("pending_confirmations") or {}
+                        info = pend2.get(rid)
+                        if not info:
+                            return
+                        payload = {
+                            "cliente_id": str(chat_id),
+                            "referencia_id": rid,
+                            "nova_categoria": cat,
+                        }
+                        try:
+                            r = requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=8)
+                            data = r.json() if r.ok else {"sucesso": False}
+                        except:
+                            data = {"sucesso": False}
+                        try:
+                            pend2.pop(rid, None)
+                            context.user_data["pending_confirmations"] = pend2
+                        except:
+                            pass
+                        try:
+                            await context.bot.delete_message(chat_id=info["chat_id"], message_id=info["message_id"])
+                        except:
+                            pass
+                        try:
+                            ltb = context.user_data.get("last_tx_block") or {}
+                            items = list(ltb.get("items", []) or [])
+                            for it2 in items:
+                                if str(it2.get("ref_id") or "") == rid:
+                                    it2["categoria"] = cat
+                            if ltb.get("chat_id") and ltb.get("message_id"):
+                                resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
+                                resposta += f"\n✅ *{len(items)} transação(ões) registrada(s)*\n\n"
+                                for it3 in items:
+                                    tp3 = str(it3.get('tipo', '')).strip().lower()
+                                    emoji3 = "🔴" if tp3 in ('saida', '0') else "🟢"
+                                    tipo3 = "DESPESA" if tp3 in ('saida', '0') else "RECEITA"
+                                    cat_nome3 = md_escape(CATEGORY_NAMES.get(it3.get('categoria', 'outros'), it3.get('categoria', 'outros')))
+                                    desc_json3 = str(it3.get('descricao', ''))
+                                    resposta += f"{emoji3} *{tipo3}:* {formatar_moeda(float(it3.get('valor', 0)))}\n"
+                                    resposta += f"   `{desc_json3}`\n"
+                                    resposta += f"   Categoria: {cat_nome3}\n\n"
+                                await context.bot.edit_message_text(chat_id=ltb["chat_id"], message_id=ltb["message_id"], text=resposta, parse_mode='Markdown')
+                        except:
+                            pass
+                    except:
+                        pass
+                try:
+                    import asyncio as _a
+                    _a.create_task(_auto_timeout())
+                except:
+                    pass
             except:
                 pass
             count += 1
@@ -1138,6 +1199,12 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         if not (ref_id and cat):
             await query.edit_message_text("⚠️ Dados inválidos.", parse_mode='Markdown')
             return
+        try:
+            pend = context.user_data.get("pending_confirmations") or {}
+            pend.pop(ref_id, None)
+            context.user_data["pending_confirmations"] = pend
+        except:
+            pass
         payload = {
             "cliente_id": get_cliente_id(query),
             "referencia_id": ref_id,
@@ -1208,6 +1275,12 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         if not (ref_id and cat):
             await query.edit_message_text("⚠️ Dados inválidos.", parse_mode='Markdown')
             return
+        try:
+            pend = context.user_data.get("pending_confirmations") or {}
+            pend.pop(ref_id, None)
+            context.user_data["pending_confirmations"] = pend
+        except:
+            pass
         payload = {
             "cliente_id": get_cliente_id(query),
             "referencia_id": ref_id,
