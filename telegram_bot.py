@@ -2883,87 +2883,72 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
     except:
         cat_ctx = None
     if cat_ctx:
+        ref_id = str(cat_ctx.get("ref_id") or "")
+        tipo = str(cat_ctx.get("tipo") or "")
+        cat_txt = str(texto or "").strip()
+        mapped = _map_text_to_category(cat_txt)
+        use_cat = mapped if mapped not in ("outros", "duvida") else (_normalize_ascii(cat_txt) if len(_normalize_ascii(cat_txt)) >= 3 else "outros")
+        payload = {
+            "cliente_id": get_cliente_id(update),
+            "referencia_id": ref_id,
+            "nova_categoria": use_cat,
+        }
         try:
-            ref_id = str(cat_ctx.get("ref_id") or "")
-            tipo = str(cat_ctx.get("tipo") or "")
-            cat_txt = str(texto or "").strip()
-            mapped = _map_text_to_category(cat_txt)
-            use_cat = mapped if mapped not in ("outros", "duvida") else (_normalize_ascii(cat_txt) if len(_normalize_ascii(cat_txt)) >= 3 else "outros")
-            payload = {
-                "cliente_id": get_cliente_id(update),
-                "referencia_id": ref_id,
-                "nova_categoria": use_cat,
-            }
-            try:
-                r = requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=8)
-                data = r.json() if r.ok else {"sucesso": False}
-            except:
-                data = {"sucesso": False}
-            try:
-                context.user_data.pop("cat_input", None)
-            except:
-                pass
+            r = requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=8)
+            data = r.json() if r.ok else {"sucesso": False}
+        except:
+            data = {"sucesso": False}
+        try:
+            context.user_data.pop("cat_input", None)
+        except:
+            pass
         if not data.get("sucesso"):
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
             await update.message.reply_text("⚠️ Não foi possível atualizar a categoria.", parse_mode='Markdown', reply_markup=kb)
             return
-            try:
-                up = data.get("atualizacao", {})
-            except:
-                up = {}
-            try:
-                rid = str(up.get("ref_id") or ref_id or "")
-                nova = str(up.get("categoria_nova") or use_cat)
-                ltb = context.user_data.get("last_tx_block") or {}
-                items = list(ltb.get("items", []) or [])
-                for it in items:
-                    if str(it.get("ref_id") or "") == rid:
-                        it["categoria"] = nova
-                        try:
-                            key = _normalize_ascii(clean_desc(str(it.get("descricao", ""))))
-                            mem = context.user_data.get("cat_memory", {}) or {}
-                            mem[key] = nova
-                            context.user_data["cat_memory"] = mem
-                        except:
-                            pass
-                resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
-                resposta += f"\n✅ *{len(items)} transação(ões) registrada(s)*\n\n"
-                for it in items:
-                    tp = str(it.get('tipo', '')).strip().lower()
-                    emoji = "🔴" if tp in ('saida', '0') else "🟢"
-                    tipo = "DESPESA" if tp in ('saida', '0') else "RECEITA"
-                    cat_nome = md_escape(CATEGORY_NAMES.get(it.get('categoria', 'outros'), it.get('categoria', 'outros')))
-                    desc_json = str(it.get('descricao', ''))
-                    resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(it.get('valor', 0)))}\n"
-                    resposta += f"   `{desc_json}`\n"
-                    resposta += f"   Categoria: {cat_nome}\n\n"
-                chat_id = ltb.get("chat_id")
-                message_id = ltb.get("message_id")
-                if chat_id and message_id:
-                    await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=resposta, parse_mode='Markdown')
-            except:
-                pass
-            try:
-                pmid = context.user_data.get("last_cat_prompt_message_id")
-                pchat = context.user_data.get("last_cat_prompt_chat_id")
-                if pmid and pchat:
-                    await context.bot.delete_message(chat_id=pchat, message_id=pmid)
-            except:
-                pass
-            try:
-                context.user_data.pop("last_cat_prompt_message_id", None)
-                context.user_data.pop("last_cat_prompt_chat_id", None)
-            except:
-                pass
-            return
+        up = data.get("atualizacao", {}) or {}
+        rid = str(up.get("ref_id") or ref_id or "")
+        nova = str(up.get("categoria_nova") or use_cat)
+        ltb = context.user_data.get("last_tx_block") or {}
+        items = list(ltb.get("items", []) or [])
+        for it in items:
+            if str(it.get("ref_id") or "") == rid:
+                it["categoria"] = nova
+                try:
+                    key = _normalize_ascii(clean_desc(str(it.get("descricao", ""))))
+                    mem = context.user_data.get("cat_memory", {}) or {}
+                    mem[key] = nova
+                    context.user_data["cat_memory"] = mem
+                except:
+                    pass
+        resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
+        resposta += f"\n✅ *{len(items)} transação(ões) registrada(s)*\n\n"
+        for it in items:
+            tp = str(it.get('tipo', '')).strip().lower()
+            emoji = "🔴" if tp in ('saida', '0') else "🟢"
+            tipo = "DESPESA" if tp in ('saida', '0') else "RECEITA"
+            cat_nome = md_escape(CATEGORY_NAMES.get(it.get('categoria', 'outros'), it.get('categoria', 'outros')))
+            desc_json = str(it.get('descricao', ''))
+            resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(it.get('valor', 0)))}\n"
+            resposta += f"   `{desc_json}`\n"
+            resposta += f"   Categoria: {cat_nome}\n\n"
+        chat_id = ltb.get("chat_id")
+        message_id = ltb.get("message_id")
+        if chat_id and message_id:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=resposta, parse_mode='Markdown')
+        try:
+            pmid = context.user_data.get("last_cat_prompt_message_id")
+            pchat = context.user_data.get("last_cat_prompt_chat_id")
+            if pmid and pchat:
+                await context.bot.delete_message(chat_id=pchat, message_id=pmid)
         except:
-            try:
-                context.user_data.pop("cat_input", None)
-            except:
-                pass
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
-            await update.message.reply_text("⚠️ Erro ao aplicar categoria digitada.", parse_mode='Markdown', reply_markup=kb)
-            return
+            pass
+        try:
+            context.user_data.pop("last_cat_prompt_message_id", None)
+            context.user_data.pop("last_cat_prompt_chat_id", None)
+        except:
+            pass
+        return
     
     intent = _detectar_intencao(texto)
     if intent:
