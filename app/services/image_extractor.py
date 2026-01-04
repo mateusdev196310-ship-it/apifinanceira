@@ -464,7 +464,9 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             tipo0 = '0'
             if re.search(r'\b(recebi|recebido|recebimento)\b', tl0, re.IGNORECASE) or 'pix recebido' in tl0 or 'credito na conta' in tl0 or 'crédito na conta' in tl0 or 'deposito' in tl0 or 'depósito' in tl0:
                 tipo0 = '1'
-            cat0, conf0 = detect_category_with_confidence(clean_desc(tl0))
+            tl0_san = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', tl0, flags=re.IGNORECASE)
+            tl0_san = re.sub(r'\binternet\s+banking\b', '', tl0_san, flags=re.IGNORECASE)
+            cat0, conf0 = detect_category_with_confidence(clean_desc(tl0_san))
             if tipo0 == '0' and cat0 == 'vendas':
                 cat0 = 'outros'
             def _nat0(tl, tp, ct):
@@ -667,7 +669,10 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             if num_vals:
                 valor = max([float(str(v).replace(',', '.')) for v in num_vals])
                 tipo = '0'
-                cat, conf = detect_category_with_confidence(clean_desc(transcrito.lower())) if transcrito else ('outros', 0.2)
+                _t = (transcrito or "").lower()
+                _t = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', _t, flags=re.IGNORECASE)
+                _t = re.sub(r'\binternet\s+banking\b', '', _t, flags=re.IGNORECASE)
+                cat, conf = detect_category_with_confidence(clean_desc(_t)) if transcrito else ('outros', 0.2)
                 desc = 'Gasto por Imagem'
                 fctx = _infer_fields(transcrito, tipo)
                 return [{
@@ -758,7 +763,9 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
         tipo = '0'
         if re.search(r'\b(recebi|recebido|recebimento)\b', tl, re.IGNORECASE) or 'pix recebido' in tl or 'credito na conta' in tl or 'crédito na conta' in tl or 'deposito' in tl or 'depósito' in tl:
             tipo = '1'
-        cat, conf = detect_category_with_confidence(clean_desc(tl))
+        tl_san = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', tl, flags=re.IGNORECASE)
+        tl_san = re.sub(r'\binternet\s+banking\b', '', tl_san, flags=re.IGNORECASE)
+        cat, conf = detect_category_with_confidence(clean_desc(tl_san))
         if tipo == '0' and cat == 'vendas':
             cat = 'outros'
         def _nat3(tl, tp, ct):

@@ -38,6 +38,10 @@ VERB_CATEGORY_DEFAULT = {
 
 def detect_category_with_confidence(text, verb=None):
     t = (text or '').lower()
+    if re.search(r'\bpix\b', t, re.IGNORECASE) or re.search(r'\btransfer\w*\b', t, re.IGNORECASE) or re.search(r'\bdep[óo]sito\b', t, re.IGNORECASE):
+        if re.search(r'assinatura\s+eletr[ôo]nica', t, re.IGNORECASE) or re.search(r'assinatura\s+digital', t, re.IGNORECASE) or re.search(r'\binternet\s+banking\b', t, re.IGNORECASE):
+            if not re.search(r'(mercado|supermercado|farm[áa]cia|restaurante|padaria|posto|uber|gasolina|combust[ií]vel|aluguel|condom[ií]nio|energia|[áa]gua|luz)', t, re.IGNORECASE):
+                return 'outros', 0.4
     # Exact keyword matches with word boundaries
     for cat, patterns in CATEGORY_PATTERNS.items():
         for pat in patterns:
