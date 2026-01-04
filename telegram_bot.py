@@ -22,7 +22,7 @@ from app.utils.formatting import (
     criar_secao,
     wrap_code_block,
 )
-from app.constants.categories import CATEGORY_NAMES
+from app.constants.categories import CATEGORY_NAMES, CATEGORY_LIST
 from app.services.rule_based import parse_text_to_transactions, clean_desc, naturalize_description, natural_score, parse_value
 from app.services.image_extractor import extrair_informacoes_da_imagem
 from app.services.database import salvar_transacao_cliente, ensure_cliente, get_db, firestore
@@ -484,6 +484,59 @@ def md_escape(s: str) -> str:
         .replace('!', '\\!')
     )
 
+def _categoria_keyboard(ref_id: str):
+    cats = [c for c in CATEGORY_LIST if c not in ("duvida",)]
+    rows = []
+    row = []
+    for c in cats:
+        label = CATEGORY_NAMES.get(c, c)
+        row.append(InlineKeyboardButton(label, callback_data=f"confirm_categoria:{ref_id}:{c}"))
+        if len(row) >= 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton("❌ Cancelar", callback_data="confirm_categoria_cancelar")])
+    return InlineKeyboardMarkup(rows)
+
+async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
+    try:
+        chat_id = get_cliente_id(update_or_query)
+        idx = {}
+        for s in salvas or []:
+            k = (str(s.get("tipo")).strip(), float(s.get("valor", 0)), str(s.get("categoria", "")).strip().lower())
+            idx[k] = s
+        count = 0
+        for it in transacoes or []:
+            cat = str(it.get("categoria", "outros") or "outros").strip().lower()
+            pend = bool(it.get("pendente_confirmacao", False)) or (cat in ("duvida", "outros"))
+            if not pend:
+                continue
+            tp_n = str(it.get("tipo", "0")).strip()
+            tp_txt = "saida" if tp_n in ("0", "despesa", "saida") else "entrada"
+            k = (tp_txt, float(it.get("valor", 0) or 0), cat)
+            sref = idx.get(k)
+            rid = sref.get("ref_id") if sref else None
+            if not rid:
+                continue
+            emoji = "🔴" if tp_txt == "saida" else "🟢"
+            tipo = "DESPESA" if tp_txt == "saida" else "RECEITA"
+            desc = str(it.get("descricao", "") or "")
+            valor = float(it.get("valor", 0) or 0)
+            cat_nome = md_escape(CATEGORY_NAMES.get(cat, cat))
+            texto = criar_cabecalho("CONFIRMAR CATEGORIA", 40)
+            texto += f"\n{emoji} {formatar_moeda(valor)}\n"
+            texto += f"`{desc}`\n"
+            texto += f"Categoria sugerida: {cat_nome}\n"
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode='Markdown', reply_markup=_categoria_keyboard(rid))
+            except:
+                pass
+            count += 1
+            if count >= 3:
+                break
+    except:
+        pass
 def formatar_data_hora_local(ts_raw):
     try:
         s = str(ts_raw or "").strip()
@@ -1009,6 +1062,47 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
         ])
         await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+    elif query.data.startswith("confirm_categoria:"):
+        try:
+            _, ref_id, cat = query.data.split(":", 2)
+        except Exception:
+            ref_id, cat = None, None
+        if not (ref_id and cat):
+            await query.edit_message_text("⚠️ Dados inválidos.", parse_mode='Markdown')
+            return
+        payload = {
+            "cliente_id": get_cliente_id(query),
+            "referencia_id": ref_id,
+            "nova_categoria": cat,
+        }
+        try:
+            r = requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=8)
+            data = r.json() if r.ok else {"sucesso": False}
+        except:
+            data = {"sucesso": False}
+        if not data.get("sucesso"):
+            err = str(data.get("erro", "Falha ao atualizar categoria."))
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
+            await query.edit_message_text(f"⚠️ {md_escape(err)}", parse_mode='Markdown', reply_markup=kb)
+            return
+        dd = data.get("totais_dia", {})
+        mm = data.get("totais_mes", {})
+        resp = criar_cabecalho("CATEGORIA ATUALIZADA", 40)
+        caixa = ""
+        caixa += "+" + ("-" * 28) + "+\n"
+        caixa += f"|{criar_linha_tabela('DIA - SALDO:', formatar_moeda(dd.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+        caixa += f"|{criar_linha_tabela('DIA - DESPESAS:', formatar_moeda(dd.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+        caixa += f"|{criar_linha_tabela('DIA - RECEITAS:', formatar_moeda(dd.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+        caixa += "+" + ("-" * 28) + "+\n"
+        caixa += f"|{criar_linha_tabela('MÊS - SALDO:', formatar_moeda(mm.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+        caixa += f"|{criar_linha_tabela('MÊS - DESPESAS:', formatar_moeda(mm.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+        caixa += f"|{criar_linha_tabela('MÊS - RECEITAS:', formatar_moeda(mm.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+        caixa += "+" + ("-" * 28) + "+"
+        resp += wrap_code_block(caixa) + "\n\n"
+        resp += "📊 Use /total para ver os totais atualizados"
+        await query.edit_message_text(resp, parse_mode='Markdown')
+    elif query.data == "confirm_categoria_cancelar":
+        await query.edit_message_text("Operação cancelada.", parse_mode='Markdown')
     elif query.data.startswith("estornar_confirmar:") or query.data.startswith("estornar_escolher:"):
         try:
             rid = query.data.split(":", 1)[1]
@@ -2752,6 +2846,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
     
     try:
         await _bg_semaphore.acquire()
+        salvas_coletadas = []
         rb_local = parse_text_to_transactions(texto) or []
         if rb_local:
             transacoes = rb_local
@@ -2759,7 +2854,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             try:
                 cid = str(update.effective_chat.id)
                 await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
+                salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
             except:
                 arq = None
             try:
@@ -2791,6 +2886,10 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                 transacoes_api = data.get("transacoes", [])
                 transacoes = transacoes_api if transacoes_api else []
                 arq = data.get("arquivo")
+                try:
+                    salvas_coletadas = data.get("salvas", []) or []
+                except:
+                    salvas_coletadas = []
             else:
                 try:
                     from app.services.extractor import extrair_informacoes_financeiras
@@ -2801,7 +2900,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                 try:
                     cid = str(update.effective_chat.id)
                     await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                    await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
+                    salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
                 except:
                     arq = None
         dedup = {}
@@ -2899,6 +2998,10 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             parse_mode='Markdown',
         reply_markup=reply_markup
         )
+        try:
+            asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_coletadas))
+        except:
+            pass
         async def _enviar_totais():
             try:
                 qs = build_cliente_query_params(update)
@@ -3129,6 +3232,11 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        try:
+            salvas_img = (data.get("salvas", []) if isinstance(data, dict) else []) or []
+            asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_img))
+        except:
+            pass
         async def _enviar_totais_img():
             try:
                 qs = build_cliente_query_params(update)
@@ -3327,6 +3435,11 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                     parse_mode='Markdown',
                     reply_markup=reply_markup
                 )
+                try:
+                    salvas_pdf = (data.get("salvas", []) if isinstance(data, dict) else []) or []
+                    asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_pdf))
+                except:
+                    pass
                 _bg_semaphore.release()
                 return
             except:
@@ -3463,6 +3576,11 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        try:
+            salvas_doc = (data.get("salvas", []) if isinstance(data, dict) else []) or []
+            asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_doc))
+        except:
+            pass
         _bg_semaphore.release()
     except:
         try:
@@ -3549,12 +3667,16 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
         if data.get("sucesso"):
             transacoes = data.get("transacoes", [])
             arq = data.get("arquivo")
+            try:
+                salvas_voz = data.get("salvas", []) or []
+            except:
+                salvas_voz = []
         else:
             transacoes = parse_text_to_transactions(texto)
             try:
                 cid = str(update.effective_chat.id)
                 await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
+                salvas_voz = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
             except:
                 arq = None
         if not transacoes:
@@ -3643,6 +3765,10 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        try:
+            asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_voz))
+        except:
+            pass
         async def _enviar_totais_audio():
             try:
                 qs = build_cliente_query_params(update)
@@ -3767,12 +3893,16 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
         if data.get("sucesso"):
             transacoes = data.get("transacoes", [])
             arq = data.get("arquivo")
+            try:
+                salvas_audio = data.get("salvas", []) or []
+            except:
+                salvas_audio = []
         else:
             transacoes = parse_text_to_transactions(texto)
             try:
                 cid = str(update.effective_chat.id)
                 await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
+                salvas_audio = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
             except:
                 arq = None
         if not transacoes:
@@ -3861,6 +3991,10 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        try:
+            asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_audio))
+        except:
+            pass
         async def _enviar_totais_audio2():
             try:
                 qs = build_cliente_query_params(update)

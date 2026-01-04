@@ -150,8 +150,9 @@ def processar():
             except:
                 pass
             erro_salvar = None
+            salvas = []
             try:
-                salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+                salvas = salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
             except Exception:
                 erro_salvar = "Falha ao salvar no Firestore"
         except Exception as e:
@@ -172,7 +173,18 @@ def processar():
                 "source": "json-transacoes",
                 "version": "image-doc-v1"
             },
-            "erro_salvar": erro_salvar
+            "erro_salvar": erro_salvar,
+            "salvas": [
+                {
+                    "ref_id": x.get("ref_id"),
+                    "valor": float(x.get("valor", 0) or 0),
+                    "tipo": str(x.get("tipo", "")),
+                    "categoria": str(x.get("categoria", "")),
+                    "descricao": str(x.get("descricao", "")),
+                    "data_referencia": str(x.get("data_referencia", "")),
+                }
+                for x in (salvas or [])
+            ]
         })
     if 'mensagem' not in data:
         return jsonify({"sucesso": False, "erro": "Mensagem não fornecida"}), 400
@@ -236,7 +248,7 @@ def processar():
         except:
             pass
         try:
-            salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+            salvas = salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
         except Exception:
             erro_salvar = "Falha ao salvar no Firestore"
     except Exception:
@@ -274,7 +286,18 @@ def processar():
             "rb_count": len(rb or []),
             "version": "ai+rule-v1"
         },
-        "erro_salvar": erro_salvar
+        "erro_salvar": erro_salvar,
+        "salvas": [
+            {
+                "ref_id": x.get("ref_id"),
+                "valor": float(x.get("valor", 0) or 0),
+                "tipo": str(x.get("tipo", "")),
+                "categoria": str(x.get("categoria", "")),
+                "descricao": str(x.get("descricao", "")),
+                "data_referencia": str(x.get("data_referencia", "")),
+            }
+            for x in (salvas or [])
+        ]
     })
 
 @app.route('/processar_audio', methods=['POST'])
@@ -449,7 +472,7 @@ def processar_pdf_totais():
             ensure_cliente(cliente_id, nome=str(data.get("cliente_nome") or None), username=str(data.get("username") or None))
         except:
             pass
-        salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
+        salvas = salvar_transacao_cliente(transacoes, cliente_id=cliente_id, origem=origem)
         try:
             venc_raw = tot.get("vencimento")
             venc_iso = _normalize_date_br(venc_raw) if venc_raw else None
@@ -494,7 +517,18 @@ def processar_pdf_totais():
         "debug": {
             "source": "pdf-totais"
         },
-        "erro_salvar": erro_salvar
+        "erro_salvar": erro_salvar,
+        "salvas": [
+            {
+                "ref_id": x.get("ref_id"),
+                "valor": float(x.get("valor", 0) or 0),
+                "tipo": str(x.get("tipo", "")),
+                "categoria": str(x.get("categoria", "")),
+                "descricao": str(x.get("descricao", "")),
+                "data_referencia": str(x.get("data_referencia", "")),
+            }
+            for x in (salvas or [])
+        ]
     })
 @app.route('/compromissos/mes', methods=['GET'])
 def compromissos_mes():
@@ -933,6 +967,49 @@ def ajustes_estornar():
                 for k, v in payload.items()
                 if k != "imutavel"
             },
+            "totais_dia": {
+                "despesas": float(ddoc.get("total_saida", 0) or 0),
+                "receitas": float(ddoc.get("total_entrada", 0) or 0),
+                "ajustes": float(ddoc.get("total_ajuste", 0) or 0),
+                "estornos": float(ddoc.get("total_estorno", 0) or 0),
+                "saldo": float(ddoc.get("saldo_dia", 0) or 0),
+            },
+            "totais_mes": {
+                "despesas": float(mdoc.get("total_saida", 0) or 0),
+                "receitas": float(mdoc.get("total_entrada", 0) or 0),
+                "ajustes": float(mdoc.get("total_ajuste", 0) or 0),
+                "estornos": float(mdoc.get("total_estorno", 0) or 0),
+                "saldo": float(mdoc.get("saldo_mes", 0) or 0),
+            }
+        })
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
+@app.route('/transacoes/atualizar_categoria', methods=['POST'])
+def transacoes_atualizar_categoria():
+    data = request.json
+    if not data:
+        return jsonify({"sucesso": False, "erro": "Payload não fornecido"}), 400
+    try:
+        cliente_id = str(data.get("cliente_id") or "default")
+        referencia_id = str(data.get("referencia_id"))
+        nova_categoria = str(data.get("nova_categoria", "") or "")
+        nova_descricao = str(data.get("nova_descricao", "") or "")
+    except:
+        return jsonify({"sucesso": False, "erro": "Campos inválidos"}), 400
+    if not nova_categoria:
+        return jsonify({"sucesso": False, "erro": "Nova categoria não fornecida"}), 400
+    try:
+        from app.services.database import atualizar_categoria_transacao, get_db
+        res = atualizar_categoria_transacao(cliente_id, referencia_id, nova_categoria, nova_descricao if nova_descricao else None)
+        if not res:
+            return jsonify({"sucesso": False, "erro": "Falha ao atualizar categoria"}), 500
+        root = get_db().collection('clientes').document(cliente_id)
+        dr = res.get("data_referencia")
+        ddoc = root.collection('dias').document(dr).get().to_dict() or {}
+        mdoc = root.collection('meses').document(dr[:7]).get().to_dict() or {}
+        return jsonify({
+            "sucesso": True,
+            "atualizacao": res,
             "totais_dia": {
                 "despesas": float(ddoc.get("total_saida", 0) or 0),
                 "receitas": float(ddoc.get("total_entrada", 0) or 0),

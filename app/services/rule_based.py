@@ -1,26 +1,26 @@
 import re
 
-CATEGORY_KEYWORDS = {
+CATEGORY_PATTERNS = {
   'alimentacao': [
-    'mercado', 'supermercado', 'mercadinho', 'mercearia', 'padaria',
-    'restaurante', 'lanche', 'lanches', 'comida', 'pizza', 'hamburguer', 'hambuguer', 'hambúrguer', 'hamburgueria',
-    'burger', 'sanduiche', 'sanduíche', 'cafe', 'café', 'churrasco', 'vinho', 'cerveja', 'bebida',
-    'marmita', 'quentinha', 'sushi', 'pastel', 'dog'
+    r'\bmercado\b', r'\bsupermercado\b', r'\bmercadinho\b', r'\bmercearia\b', r'\bpadaria\b',
+    r'\brestaurante\b', r'\blanches?\b', r'\bcomida\b', r'\bpizza\b', r'\bhamburguer\b', r'\bhambuguer\b', r'\bhambúrguer\b', r'\bhamburgueria\b',
+    r'\bburger\b', r'\bsandu[ií]che\b', r'\bcaf[eé]\b', r'\bchurrasco\b', r'\bvinho\b', r'\bcerveja\b', r'\bbebida\b',
+    r'\bmarmita\b', r'\bquentinha\b', r'\bsushi\b', r'\bpastel\b', r'\bdog\b', r'\bifood\b', r'\bdelivery\b'
   ],
   'transporte': [
-    'gasolina', 'combustivel', 'combustível', 'uber', '99', 'estacionamento', 'ônibus', 'onibus', 'metro', 'metrô',
-    'passagem', 'taxi', 'táxi', 'pedagio', 'pedágio', 'posto'
+    r'\bgasolina\b', r'\bcombust[ií]vel\b', r'\buber\b', r'\b99\b', r'\bestacionamento\b', r'\bônibus\b', r'\bonibus\b', r'\bmetr[oô]\b',
+    r'\bpassagem\b', r'\btax[ií]\b', r'\bpedag[ií]o\b', r'\bposto\b'
   ],
-  'moradia': ['aluguel', 'condomínio', 'condominio', 'iptu', 'energia', 'água', 'agua', 'luz'],
-  'saude': ['farmácia', 'farmacia', 'médico', 'medico', 'remédio', 'remedio', 'dentista', 'consulta', 'exame', 'plano de saúde', 'plano'],
-  'lazer': ['cinema', 'streaming', 'academia', 'netflix', 'spotify', 'jogo', 'aposta', 'cassino'],
-  'vestuario': ['roupa', 'sapato', 'camisa', 'calça', 'moleton', 'camiseta', 'tenis', 'tênis', 'acessório', 'acessorio'],
+  'moradia': [r'\baluguel\b', r'\bcondom[ií]nio\b', r'\bcondominio\b', r'\biptu\b', r'\benergia\b', r'\b[áa]gua\b', r'\bluz\b'],
+  'saude': [r'\bfarm[áa]cia\b', r'\bm[eé]dic[o]\b', r'\brem[eé]di[o]\b', r'\bdentista\b', r'\bconsulta\b', r'\bexame\b', r'\bplano\s+de\s+sa[úu]de\b', r'\bplano\b'],
+  'lazer': [r'\bcinema\b', r'\bstreaming\b', r'\bacademia\b', r'\bnetflix\b', r'\bspotify\b', r'\bjogo\b', r'\baposta[s]?\b', r'\bcassino\b'],
+  'vestuario': [r'\broupa\b', r'\bsapato\b', r'\bcamisa\b', r'\bcal[cç]a\b', r'\bmoleton\b', r'\bcamiseta\b', r'\bt[eê]nis\b', r'\bacess[óo]ri[o]\b'],
   'servicos': [
-    'conta', 'assinatura', 'serviço', 'servico', 'internet', 'telefonia', 'cabeleireiro', 'barbearia', 'salão', 'manicure', 'pedicure',
-    'plano', 'tv', 'net', 'vivo', 'claro', 'oi', 'prime', 'disney', 'icloud', 'google one', 'spotify', 'youtube'
+    r'\bconta\b', r'\bassinatura\b', r'\bservi[cç]o\b', r'\binternet\b', r'\btelefonia\b', r'\bcabeleireiro\b', r'\bbarbearia\b', r'\bsal[aã]o\b', r'\bmanicure\b', r'\bpedicure\b',
+    r'\bplano\b', r'\btv\b', r'\bnet\b', r'\bvivo\b', r'\bclaro\b', r'\boi\b', r'\bprime\b', r'\bdisney\b', r'\bicloud\b', r'\bgoogle\s+one\b', r'\bspotify\b', r'\byoutube\b'
   ],
-  'salario': ['salário', 'salario', 'freela'],
-  'vendas': ['vendi', 'venda', 'vendas'],
+  'salario': [r'\bsal[áa]rio\b', r'\bsalario\b', r'\bfreela\b'],
+  'vendas': [r'\bvendi\b', r'\bvenda[s]?\b', r'\bvendas\b'],
 }
 
 VERB_CATEGORY_DEFAULT = {
@@ -36,23 +36,32 @@ VERB_CATEGORY_DEFAULT = {
     'freela': 'salario',
 }
 
-def detect_category(text, verb=None):
-    t = text.lower()
-    for cat, kws in CATEGORY_KEYWORDS.items():
-        for kw in kws:
-            if kw in t:
-                return cat
-    if re.search(r'sal[áa]rio|contracheque|holerite|folha', t):
-        return 'salario'
-    if re.search(r'\bvend', t):
-        return 'vendas'
-    if re.search(r'\bpix\b', t) or re.search(r'transfer', t) or re.search(r'dep[óo]sito', t):
-        return 'outros'
+def detect_category_with_confidence(text, verb=None):
+    t = (text or '').lower()
+    # Exact keyword matches with word boundaries
+    for cat, patterns in CATEGORY_PATTERNS.items():
+        for pat in patterns:
+            if re.search(pat, t, re.IGNORECASE):
+                # High confidence for exact pattern hit
+                return cat, 0.95
+    # Additional explicit signals
+    if re.search(r'\bsal[áa]rio\b|\bcontracheque\b|\bholerite\b|\bfolha\b', t, re.IGNORECASE):
+        return 'salario', 0.95
+    if re.search(r'\bvend\w*\b', t, re.IGNORECASE):
+        return 'vendas', 0.8
+    if re.search(r'\bpix\b', t, re.IGNORECASE) or re.search(r'\btransfer\w*\b', t, re.IGNORECASE) or re.search(r'\bdep[óo]sito\b', t, re.IGNORECASE):
+        # PIX/transfer/deposito is ambiguous without context
+        return 'outros', 0.4
+    # Verb-based default as very low confidence
     if verb:
         v = verb.lower()
         if v in VERB_CATEGORY_DEFAULT:
-            return VERB_CATEGORY_DEFAULT[v]
-    return 'outros'
+            return VERB_CATEGORY_DEFAULT[v], 0.3
+    return 'outros', 0.2
+
+def detect_category(text, verb=None):
+    cat, _ = detect_category_with_confidence(text, verb)
+    return cat
 
 def parse_value(raw):
     s = raw.strip()
@@ -473,7 +482,7 @@ def parse_text_to_transactions(text):
         inner_tail = t[m.span(3)[1]:m.end()]
         val = _adjust_magnitude_by_tail(val, inner_tail)
         desc_clean = clean_desc(desc or verb)
-        categoria = detect_category(desc_clean or t, verb)
+        categoria, conf = detect_category_with_confidence(desc_clean or t, verb)
         context = t[m.start():m.end()]
         desc_nat = naturalize_description('0', categoria, context)
         results.append({
@@ -482,6 +491,8 @@ def parse_text_to_transactions(text):
             "categoria": categoria,
             "descricao": desc_nat,
             "moeda": "BRL",
+            "confidence_score": float(conf),
+            "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
         })
         outer_tail = t[m.end():]
         next_verb = VERB_BOUNDARY.search(t, m.end())
@@ -497,6 +508,8 @@ def parse_text_to_transactions(text):
                 "categoria": categoria,
                 "descricao": desc_nat,
                 "moeda": "BRL",
+                "confidence_score": float(conf),
+                "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
             })
         has_any = True
     for m in INCOME_REGEX.finditer(t):
@@ -507,7 +520,7 @@ def parse_text_to_transactions(text):
         inner_tail = t[m.span(3)[1]:m.end()]
         val = _adjust_magnitude_by_tail(val, inner_tail)
         desc_clean = clean_desc(desc or verb)
-        categoria = detect_category(desc_clean or t, verb)
+        categoria, conf = detect_category_with_confidence(desc_clean or t, verb)
         context = t[m.start():m.end()]
         desc_nat = naturalize_description('1', categoria, context)
         results.append({
@@ -516,6 +529,8 @@ def parse_text_to_transactions(text):
             "categoria": categoria,
             "descricao": desc_nat,
             "moeda": "BRL",
+            "confidence_score": float(conf),
+            "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
         })
         outer_tail = t[m.end():]
         next_verb = VERB_BOUNDARY.search(t, m.end())
@@ -531,6 +546,8 @@ def parse_text_to_transactions(text):
                 "categoria": categoria,
                 "descricao": desc_nat,
                 "moeda": "BRL",
+                "confidence_score": float(conf),
+                "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
             })
         has_any = True
     for m in TRANSFER_OUT_REGEX.finditer(t):
@@ -541,7 +558,7 @@ def parse_text_to_transactions(text):
         inner_tail = t[m.span(3)[1]:m.end()]
         val = _adjust_magnitude_by_tail(val, inner_tail)
         desc_clean = clean_desc(desc or '')
-        categoria = detect_category(desc_clean or t, 'transferi')
+        categoria, conf = detect_category_with_confidence(desc_clean or t, 'transferi')
         context = t[m.start():m.end()]
         desc_nat = naturalize_description('0', categoria, context)
         results.append({
@@ -550,6 +567,8 @@ def parse_text_to_transactions(text):
             "categoria": categoria,
             "descricao": desc_nat,
             "moeda": "BRL",
+            "confidence_score": float(conf),
+            "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
         })
         outer_tail = t[m.end():]
         next_verb = VERB_BOUNDARY.search(t, m.end())
@@ -565,6 +584,8 @@ def parse_text_to_transactions(text):
                 "categoria": categoria,
                 "descricao": desc_nat,
                 "moeda": "BRL",
+                "confidence_score": float(conf),
+                "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
             })
         has_any = True
     if not has_any:
@@ -576,7 +597,7 @@ def parse_text_to_transactions(text):
             if not vals:
                 continue
             desc_clean = clean_desc(tail or verb)
-            categoria = detect_category(desc_clean or t, verb)
+            categoria, conf = detect_category_with_confidence(desc_clean or t, verb)
             context = t[m.start(): m.end()] + " " + tail
             desc_nat = naturalize_description('0', categoria, context)
             for v in vals:
@@ -586,6 +607,8 @@ def parse_text_to_transactions(text):
                     "categoria": categoria,
                     "descricao": desc_nat,
                     "moeda": "BRL",
+                    "confidence_score": float(conf),
+                    "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
                 })
         for m in VERB_ONLY_INC.finditer(t):
             verb = m.group(1)
@@ -595,7 +618,7 @@ def parse_text_to_transactions(text):
             if not vals:
                 continue
             desc_clean = clean_desc(tail or verb)
-            categoria = detect_category(desc_clean or t, verb)
+            categoria, conf = detect_category_with_confidence(desc_clean or t, verb)
             context = t[m.start(): m.end()] + " " + tail
             desc_nat = naturalize_description('1', categoria, context)
             for v in vals:
@@ -605,5 +628,7 @@ def parse_text_to_transactions(text):
                     "categoria": categoria,
                     "descricao": desc_nat,
                     "moeda": "BRL",
+                    "confidence_score": float(conf),
+                    "pendente_confirmacao": (categoria == 'outros') or (float(conf) < 0.9),
                 })
     return results

@@ -310,6 +310,8 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
             "referencia_id": referencia_id,
             "motivo_ajuste": motivo_ajuste,
             "imutavel": True,
+            "confidence_score": float(base.get("confidence_score", item.get("confidence_score", 0.0) or 0.0) or 0.0),
+            "pendente_confirmacao": bool(base.get("pendente_confirmacao", item.get("pendente_confirmacao", False))),
         }
         day_ref = root.collection("transacoes").document(doc["data_referencia"])
         item_ref = day_ref.collection("items").document()
@@ -514,6 +516,97 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
         pass
     batch.commit()
     return payload
+def atualizar_categoria_transacao(cliente_id: str, referencia_id: str, nova_categoria: str, nova_descricao: str = None):
+    db = get_db()
+    root = _cliente_root(cliente_id)
+    dr, did = parse_ref_id(referencia_id)
+    if dr:
+        tdoc_ref = root.collection("transacoes").document(dr).collection("items").document(did)
+        tdoc = tdoc_ref.get()
+    else:
+        tdoc_ref = root.collection("transacoes").document(str(referencia_id))
+        tdoc = tdoc_ref.get()
+    if not tdoc.exists:
+        return None
+    o = tdoc.to_dict() or {}
+    if bool(o.get("estornado", False)):
+        return None
+    val = float(o.get("valor", 0) or 0)
+    old_cat = str(o.get("categoria", "outros") or "outros")
+    tp_raw = str(o.get("tipo", "saida") or "saida").strip().lower()
+    dr = str(o.get("data_referencia") or _day_key_sp())
+    mk = dr[:7]
+    novo_cat = str(nova_categoria or old_cat).strip().lower()
+    if novo_cat == old_cat:
+        try:
+            tdoc_ref.set({
+                "pendente_confirmacao": False,
+                "confidence_score": 0.95,
+                "atualizado_em": firestore.SERVER_TIMESTAMP,
+            }, merge=True)
+        except:
+            pass
+        return {
+            "ref_id": str(o.get("ref_id") or referencia_id),
+            "data_referencia": dr,
+            "valor": val,
+            "tipo": tp_raw,
+            "categoria_anterior": old_cat,
+            "categoria_nova": novo_cat,
+        }
+    batch = db.batch()
+    upd = {
+        "categoria": novo_cat,
+        "pendente_confirmacao": False,
+        "confidence_score": 0.95,
+        "atualizado_em": firestore.SERVER_TIMESTAMP,
+    }
+    if isinstance(nova_descricao, str) and nova_descricao.strip():
+        try:
+            from app.services.rule_based import naturalize_description, clean_desc
+            desc_raw = str(nova_descricao or "")
+            desc_nat = naturalize_description(str(o.get("tipo") or ""), novo_cat, clean_desc(desc_raw))
+            upd["descricao"] = desc_nat
+        except:
+            upd["descricao"] = str(nova_descricao)
+    batch.update(tdoc_ref, upd)
+    dref = root.collection("dias").document(dr)
+    mref = root.collection("meses").document(mk)
+    inc_d = {"atualizado_em": firestore.SERVER_TIMESTAMP}
+    inc_m = {"atualizado_em": firestore.SERVER_TIMESTAMP}
+    if tp_raw in ("entrada", "1", "receita"):
+        inc_d.update({
+            f"categorias_entrada.{old_cat}": firestore.Increment(-val),
+            f"categorias_entrada.{novo_cat}": firestore.Increment(val),
+        })
+        inc_m.update({
+            f"categorias_entrada.{old_cat}": firestore.Increment(-val),
+            f"categorias_entrada.{novo_cat}": firestore.Increment(val),
+        })
+    elif tp_raw in ("saida", "0", "despesa"):
+        inc_d.update({
+            f"categorias_saida.{old_cat}": firestore.Increment(-val),
+            f"categorias_saida.{novo_cat}": firestore.Increment(val),
+        })
+        inc_m.update({
+            f"categorias_saida.{old_cat}": firestore.Increment(-val),
+            f"categorias_saida.{novo_cat}": firestore.Increment(val),
+        })
+    batch.set(dref, inc_d, merge=True)
+    batch.set(mref, inc_m, merge=True)
+    try:
+        batch.set(root, {"atualizado_em": firestore.SERVER_TIMESTAMP}, merge=True)
+    except:
+        pass
+    batch.commit()
+    return {
+        "ref_id": str(o.get("ref_id") or referencia_id),
+        "data_referencia": dr,
+        "valor": val,
+        "tipo": tp_raw,
+        "categoria_anterior": old_cat,
+        "categoria_nova": novo_cat,
+    }
 def backup_firestore_data(output_path=None):
     db = get_db()
     ts = _now_sp().strftime("%Y%m%dT%H%M%S")

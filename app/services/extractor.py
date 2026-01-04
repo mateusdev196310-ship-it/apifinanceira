@@ -23,7 +23,7 @@ def extrair_informacoes_financeiras(texto_usuario):
         "1. Tipo:\n"
         '   - Despesa (gastei, paguei, comprei, custou, transferi) → "0"\n'
         '   - Receita (recebi, ganhei, vendi, salário, freela) → "1"\n'
-        '2. Categoria: use apenas as listadas. Se ambígua, use "outros". "vendas" para venda/vendi. "salario" somente com menção explícita a salário/holerite/folha/contracheque.\n'
+        '2. Categoria: use apenas as listadas. Se ambígua ou incerta, use "duvida". "vendas" para venda/vendi. "salario" somente com menção explícita a salário/holerite/folha/contracheque.\n'
         '3. Valor: extraia número decimal com duas casas. Suporta formatos como "1.500", "1,500.00", "477,17", "R$ 50". Converta para 50.00, 477.17 etc.\n'
         "4. Descrição:\n"
         '   - Curta (3–6 palavras), clara e objetiva, fiel ao que o usuário disse.\n'
@@ -509,6 +509,20 @@ def extrair_informacoes_financeiras(texto_usuario):
                     pass
                 ai_resultados = []
         if ai_resultados:
+            try:
+                out2 = []
+                for it in ai_resultados:
+                    c = str(it.get("categoria", "outros") or "outros").strip().lower()
+                    if c in ("duvida", "outros"):
+                        it["pendente_confirmacao"] = True
+                        it["confidence_score"] = 0.6
+                    else:
+                        it["pendente_confirmacao"] = False
+                        it["confidence_score"] = 0.9
+                    out2.append(it)
+                ai_resultados = out2
+            except:
+                pass
             try:
                 print(f"[extrair_informacoes_financeiras] fonte=gemini qtd={len(ai_resultados)}")
             except:

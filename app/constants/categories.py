@@ -8,10 +8,11 @@ CATEGORY_NAMES = {
     'servicos': '🔧 Serviços',
     'salario': '💼 Salário',
     'vendas': '🛍️ Vendas',
-    'outros': '📦 Outros'
+    'outros': '📦 Outros',
+    'duvida': '❓ Dúvida'
 }
 
 CATEGORY_LIST = [
     "alimentacao", "transporte", "lazer", "vestuario",
-    "vendas", "salario", "servicos", "moradia", "saude", "outros"
+    "vendas", "salario", "servicos", "moradia", "saude", "outros", "duvida"
 ]

@@ -10,7 +10,7 @@ from datetime import datetime
 from app.services.gemini import get_client
 from google.genai import types
 from app.services.extractor import extrair_informacoes_financeiras
-from app.services.rule_based import detect_category, clean_desc, naturalize_description
+from app.services.rule_based import detect_category, clean_desc, naturalize_description, detect_category_with_confidence
 
 def _infer_fields(tl: str, tp: str):
     s = (tl or "").lower()
@@ -26,7 +26,7 @@ def _infer_fields(tl: str, tp: str):
     elif re.search(r"dinheiro|esp[eé]cie", s, re.IGNORECASE):
         metodo = "dinheiro"
     est = ""
-    m = re.search(r"(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\s]{0,30})", tl or "", re.IGNORECASE)
+    m = re.search(r"\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\s]{0,30})", tl or "", re.IGNORECASE)
     if m:
         est = f"{m.group(1)} {m.group(2)}".strip()
     rec = ""
@@ -40,9 +40,9 @@ def _infer_fields(tl: str, tp: str):
         mm = re.search(r"(?:de|do|da)\s+([A-Za-z\u00c0-\u017f][A-Za-z0-9\u00c0-\u017f\s]{2,30})", tl or "", re.IGNORECASE)
         if mm and not re.search(r"sal[áa]ri|salario|servi[çc]o|mercado|supermercado", mm.group(1), re.IGNORECASE):
             rec = mm.group(1).strip()
-        elif re.search(r"cliente|pagador|remetente", tl or "", re.IGNORECASE):
+        elif re.search(r"\b(cliente|pagador|remetente)\b", tl or "", re.IGNORECASE):
             rec = "cliente"
-        elif re.search(r"sal[áa]ri|folha", tl or "", re.IGNORECASE):
+        elif re.search(r"\bsal[áa]ri\w*\b|\bfolha\b", tl or "", re.IGNORECASE):
             rec = "empregador"
     dt = ""
     iso = re.search(r"\b(\d{4})[-/\.](\d{2})[-/\.](\d{2})\b", tl or "")
@@ -368,7 +368,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                 if num_vals:
                     valor = max([float(str(v).replace(',', '.')) for v in num_vals])
                     tipo = '0'
-                    cat = detect_category(clean_desc(transcrito.lower())) if transcrito else 'outros'
+                    cat, conf = detect_category_with_confidence(clean_desc(transcrito.lower())) if transcrito else ('outros', 0.2)
                     tlv = (transcrito or "").lower()
                     def _nat(tl, tp, ct):
                         s = tl or ""
@@ -384,19 +384,19 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                                 return 'pix recebido'
                             return 'receita'
                         else:
-                            if re.search(r'mercado|supermercado', s):
+                            if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
                                 return 'mercado'
-                            if re.search(r'farm[áa]cia', s):
+                            if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
                                 return 'farmácia'
-                            if re.search(r'restaurante|pizza|lanche|hamburg', s):
+                            if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
                                 return 'restaurante'
-                            if 'uber' in s:
+                            if re.search(r'\buber\b', s, re.IGNORECASE):
                                 return 'uber'
-                            if re.search(r'gasolina|combust[ií]vel', s):
+                            if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
                                 return 'combustível'
-                            if re.search(r'internet|streaming|assinatura|telefonia', s):
+                            if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
                                 return 'internet'
-                            if re.search(r'aluguel|condom[ií]nio|energia|[áa]gua|luz', s):
+                            if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
                                 return 'moradia'
                             return ct or 'outros'
                     desc_base = _nat(tlv, tipo, cat)
@@ -412,6 +412,8 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                         "estabelecimento": fctx.get("estabelecimento", ""),
                         "recebedor": fctx.get("recebedor", ""),
                         "data_transacao": fctx.get("data_transacao", ""),
+                        "confidence_score": float(conf),
+                        "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
                     }]
             except:
                 pass
@@ -462,12 +464,12 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             tipo0 = '0'
             if re.search(r'\b(recebi|recebido|recebimento)\b', tl0, re.IGNORECASE) or 'pix recebido' in tl0 or 'credito na conta' in tl0 or 'crédito na conta' in tl0 or 'deposito' in tl0 or 'depósito' in tl0:
                 tipo0 = '1'
-            cat0 = detect_category(clean_desc(tl0))
+            cat0, conf0 = detect_category_with_confidence(clean_desc(tl0))
             if tipo0 == '0' and cat0 == 'vendas':
                 cat0 = 'outros'
             def _nat0(tl, tp, ct):
                 s = tl or ""
-                m = re.search(r'(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
+                m = re.search(r'\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
                 if m:
                     return f"{m.group(1)} {m.group(2)}".strip()
                 if tp == '1':
@@ -475,31 +477,31 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                         return 'salário'
                     if re.search(r'vend', s):
                         return 'vendas'
-                    if 'pix' in s or 'depósito' in s or 'deposito' in s:
+                    if re.search(r'\bpix\b', s, re.IGNORECASE) or 'depósito' in s or 'deposito' in s:
                         return 'pix recebido'
                     return 'receita'
                 else:
-                    if 'pix' in s:
+                    if re.search(r'\bpix\b', s, re.IGNORECASE):
                         return 'pix'
-                    if re.search(r'transfer', s):
+                    if re.search(r'\btransfer\w*\b', s, re.IGNORECASE):
                         return 'transferência'
-                    if re.search(r'cart[ãa]o|cr[eé]dito|d[ée]bito', s):
+                    if re.search(r'\bcart[ãa]o\b|\bcr[eé]dito\b|\bd[ée]bito\b', s, re.IGNORECASE):
                         return 'cartão'
-                    if 'boleto' in s:
+                    if re.search(r'\bboleto\b', s, re.IGNORECASE):
                         return 'boleto'
-                    if re.search(r'mercado|supermercado', s):
+                    if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
                         return 'mercado'
-                    if re.search(r'farm[áa]cia', s):
+                    if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
                         return 'farmácia'
-                    if re.search(r'restaurante|pizza|lanche|hamburg', s):
+                    if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
                         return 'restaurante'
-                    if 'uber' in s:
+                    if re.search(r'\buber\b', s, re.IGNORECASE):
                         return 'uber'
-                    if re.search(r'gasolina|combust[ií]vel', s):
+                    if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
                         return 'combustível'
-                    if re.search(r'internet|streaming|assinatura|telefonia', s):
+                    if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
                         return 'internet'
-                    if re.search(r'aluguel|condom[ií]nio|energia|[áa]gua|luz', s):
+                    if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
                         return 'moradia'
                     return ct or 'outros'
             base0 = _nat0(tl0, tipo0, cat0)
@@ -519,6 +521,8 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                 "estabelecimento": fctx.get("estabelecimento", ""),
                 "recebedor": fctx.get("recebedor", ""),
                 "data_transacao": fctx.get("data_transacao", ""),
+                "confidence_score": float(conf0),
+                "pendente_confirmacao": (cat0 == 'outros') or (float(conf0) < 0.9),
             }]
         prompt_json = (
             "Com base no texto transcrito abaixo, extraia transações financeiras e retorne APENAS um ARRAY JSON:\n"
@@ -622,6 +626,8 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                         "categoria": cat,
                         "descricao": desc_raw,
                         "moeda": "BRL",
+                        "confidence_score": float(0.95 if re.search(r'\b(mercado|supermercado|farmácia|restaurante|padaria|uber|gasolina|internet|aluguel)\b', tlm, re.IGNORECASE) else 0.5),
+                        "pendente_confirmacao": (cat == 'outros') or (not re.search(r'\b(mercado|supermercado|farmácia|restaurante|padaria|uber|gasolina|internet|aluguel)\b', tlm, re.IGNORECASE)),
                     })
                 except:
                     continue
@@ -661,7 +667,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             if num_vals:
                 valor = max([float(str(v).replace(',', '.')) for v in num_vals])
                 tipo = '0'
-                cat = detect_category(clean_desc(transcrito.lower())) if transcrito else 'outros'
+                cat, conf = detect_category_with_confidence(clean_desc(transcrito.lower())) if transcrito else ('outros', 0.2)
                 desc = 'Gasto por Imagem'
                 fctx = _infer_fields(transcrito, tipo)
                 return [{
@@ -674,6 +680,8 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     "estabelecimento": fctx.get("estabelecimento", ""),
                     "recebedor": fctx.get("recebedor", ""),
                     "data_transacao": fctx.get("data_transacao", ""),
+                    "confidence_score": float(conf),
+                    "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
                 }]
         except:
             pass
@@ -691,6 +699,11 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     o.setdefault("estabelecimento", fctx.get("estabelecimento", ""))
                     o.setdefault("recebedor", fctx.get("recebedor", ""))
                     o.setdefault("data_transacao", fctx.get("data_transacao", ""))
+                    cr = str(o.get("categoria", "outros")).strip().lower()
+                    if cr == 'duvida':
+                        o["categoria"] = 'outros'
+                        o["pendente_confirmacao"] = True
+                        o["confidence_score"] = float(0.4)
                     out_rb.append(o)
                 except:
                     continue
@@ -745,12 +758,12 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
         tipo = '0'
         if re.search(r'\b(recebi|recebido|recebimento)\b', tl, re.IGNORECASE) or 'pix recebido' in tl or 'credito na conta' in tl or 'crédito na conta' in tl or 'deposito' in tl or 'depósito' in tl:
             tipo = '1'
-        cat = detect_category(clean_desc(tl))
+        cat, conf = detect_category_with_confidence(clean_desc(tl))
         if tipo == '0' and cat == 'vendas':
             cat = 'outros'
         def _nat3(tl, tp, ct):
             s = tl or ""
-            m = re.search(r'(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
+            m = re.search(r'\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
             if m:
                 return f"{m.group(1)} {m.group(2)}".strip()
             if tp == '1':
@@ -762,27 +775,27 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     return 'pix recebido'
                 return 'receita'
             else:
-                if 'pix' in s:
+                if re.search(r'\bpix\b', s, re.IGNORECASE):
                     return 'pix'
-                if re.search(r'transfer', s):
+                if re.search(r'\btransfer\w*\b', s, re.IGNORECASE):
                     return 'transferência'
-                if re.search(r'cart[ãa]o|cr[eé]dito|d[ée]bito', s):
+                if re.search(r'\bcart[ãa]o\b|\bcr[eé]dito\b|\bd[ée]bito\b', s, re.IGNORECASE):
                     return 'cartão'
-                if 'boleto' in s:
+                if re.search(r'\bboleto\b', s, re.IGNORECASE):
                     return 'boleto'
-                if re.search(r'mercado|supermercado', s):
+                if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
                     return 'mercado'
-                if re.search(r'farm[áa]cia', s):
+                if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
                     return 'farmácia'
-                if re.search(r'restaurante|pizza|lanche|hamburg', s):
+                if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
                     return 'restaurante'
-                if 'uber' in s:
+                if re.search(r'\buber\b', s, re.IGNORECASE):
                     return 'uber'
-                if re.search(r'gasolina|combust[ií]vel', s):
+                if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
                     return 'combustível'
-                if re.search(r'internet|streaming|assinatura|telefonia', s):
+                if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
                     return 'internet'
-                if re.search(r'aluguel|condom[ií]nio|energia|[áa]gua|luz', s):
+                if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
                     return 'moradia'
                 return ct or 'outros'
         base_desc = _nat3(tl, tipo, cat)
@@ -798,6 +811,8 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             "estabelecimento": fctx.get("estabelecimento", ""),
             "recebedor": fctx.get("recebedor", ""),
             "data_transacao": fctx.get("data_transacao", ""),
+            "confidence_score": float(conf),
+            "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
         }]
     except:
         return []
