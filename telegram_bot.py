@@ -27,7 +27,7 @@ from app.utils.formatting import (
 from app.constants.categories import CATEGORY_NAMES, CATEGORY_LIST
 from app.services.rule_based import parse_text_to_transactions, clean_desc, naturalize_description, natural_score, parse_value
 from app.services.image_extractor import extrair_informacoes_da_imagem
-from app.services.database import salvar_transacao_cliente, ensure_cliente, get_db, firestore
+from app.services.database import salvar_transacao_cliente, ensure_cliente, get_db, firestore, get_categoria_memoria, atualizar_memoria_categoria
 from time import time as _now_ts
 from app.services.gemini import is_available as _gemini_ok
 try:
@@ -637,6 +637,18 @@ async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
                             for it2 in items:
                                 if str(it2.get("ref_id") or "") == rid:
                                     it2["categoria"] = cat
+                                    try:
+                                        key = _normalize_ascii(clean_desc(str(it2.get("descricao", ""))))
+                                        mem = context.user_data.get("cat_memory", {}) or {}
+                                        if key:
+                                            mem[key] = cat
+                                            context.user_data["cat_memory"] = mem
+                                            try:
+                                                await asyncio.to_thread(atualizar_memoria_categoria, str(chat_id), key, cat)
+                                            except:
+                                                pass
+                                    except:
+                                        pass
                             if ltb.get("chat_id") and ltb.get("message_id"):
                                 resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
                                 resposta += f"\n✅ *{len(items)} transação(ões) registrada(s)*\n\n"
@@ -1234,6 +1246,10 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
                         mem = context.user_data.get("cat_memory", {}) or {}
                         mem[key] = nova
                         context.user_data["cat_memory"] = mem
+                        try:
+                            await asyncio.to_thread(atualizar_memoria_categoria, get_cliente_id(query), key, nova)
+                        except:
+                            pass
                     except:
                         pass
             resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
@@ -2992,6 +3008,10 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                     mem = context.user_data.get("cat_memory", {}) or {}
                     mem[key] = nova
                     context.user_data["cat_memory"] = mem
+                    try:
+                        await asyncio.to_thread(atualizar_memoria_categoria, get_cliente_id(update), key, nova)
+                    except:
+                        pass
                 except:
                     pass
         resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
@@ -3147,6 +3167,16 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                     mem = context.user_data.get("cat_memory", {})
                 except:
                     mem = {}
+                try:
+                    cid = str(update.effective_chat.id)
+                    mem_db = await asyncio.to_thread(get_categoria_memoria, cid)
+                    if isinstance(mem_db, dict) and mem_db:
+                        for k, v in mem_db.items():
+                            if k and v and v not in ("outros", "duvida"):
+                                mem[k] = v
+                    context.user_data["cat_memory"] = mem
+                except:
+                    pass
                 try:
                     for it in transacoes:
                         try:
@@ -3569,6 +3599,16 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             mem = context.user_data.get("cat_memory", {})
         except:
             mem = {}
+        try:
+            cid = str(update.effective_chat.id)
+            mem_db = await asyncio.to_thread(get_categoria_memoria, cid)
+            if isinstance(mem_db, dict) and mem_db:
+                for k, v in mem_db.items():
+                    if k and v and v not in ("outros", "duvida"):
+                        mem[k] = v
+            context.user_data["cat_memory"] = mem
+        except:
+            pass
         try:
             idx_u = {}
             for s in (data.get("salvas", []) if isinstance(data, dict) else []):

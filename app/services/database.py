@@ -607,6 +607,27 @@ def atualizar_categoria_transacao(cliente_id: str, referencia_id: str, nova_cate
         "categoria_anterior": old_cat,
         "categoria_nova": novo_cat,
     }
+def get_categoria_memoria(cliente_id: str):
+    try:
+        db = get_db()
+        root = _cliente_root(cliente_id)
+        doc = root.collection("memoria").document("categorias").get()
+        o = doc.to_dict() or {}
+        return dict(o.get("desc_map", {}) or {})
+    except:
+        return {}
+def atualizar_memoria_categoria(cliente_id: str, key: str, categoria: str):
+    try:
+        db = get_db()
+        root = _cliente_root(cliente_id)
+        payload = {
+            "desc_map": {str(key or ""): str(categoria or "outros")},
+            "atualizado_em": firestore.SERVER_TIMESTAMP,
+        }
+        root.collection("memoria").document("categorias").set(payload, merge=True)
+        return True
+    except:
+        return False
 def backup_firestore_data(output_path=None):
     db = get_db()
     ts = _now_sp().strftime("%Y%m%dT%H%M%S")

@@ -5,21 +5,27 @@ CATEGORY_PATTERNS = {
     r'\bmercado\b', r'\bsupermercado\b', r'\bmercadinho\b', r'\bmercearia\b', r'\bpadaria\b',
     r'\brestaurante\b', r'\blanches?\b', r'\bcomida\b', r'\bpizza\b', r'\bhamburguer\b', r'\bhambuguer\b', r'\bhambúrguer\b', r'\bhamburgueria\b',
     r'\bburger\b', r'\bsandu[ií]che\b', r'\bcaf[eé]\b', r'\bchurrasco\b', r'\bvinho\b', r'\bcerveja\b', r'\bbebida\b',
-    r'\bmarmita\b', r'\bquentinha\b', r'\bsushi\b', r'\bpastel\b', r'\bdog\b', r'\bifood\b', r'\bdelivery\b'
+    r'\bmarmita\b', r'\bquentinha\b', r'\bsushi\b', r'\bpastel\b', r'\bdog\b', r'\bifood\b', r'\bdelivery\b',
+    r'\brappi\b', r'\bubereats\b', r'\bmc(?:\s*donald\'?s)?\b', r'\bmcdonalds\b', r'\bburger\s*king\b', r'\bbk\b', r'\bsubway\b', r'\bhabibs\b', r'\boutback\b',
+    r'\bcarrefour\b', r'\bp[aã]o\s+de\s+a[cç]u?car\b', r'\bassai\b', r'\batacad[aã]o\b', r'\bsam\'?s\s*club\b'
   ],
   'transporte': [
     r'\bgasolina\b', r'\bcombust[ií]vel\b', r'\buber\b', r'\b99\b', r'\bestacionamento\b', r'\bônibus\b', r'\bonibus\b', r'\bmetr[oô]\b',
-    r'\bpassagem\b', r'\btax[ií]\b', r'\bpedag[ií]o\b', r'\bposto\b'
+    r'\bpassagem\b', r'\btax[ií]\b', r'\bpedag[ií]o\b', r'\bposto\b', r'\bgnv\b', r'\betanol\b', r'\bdiesel\b', r'\bipva\b'
   ],
-  'moradia': [r'\baluguel\b', r'\bcondom[ií]nio\b', r'\bcondominio\b', r'\biptu\b', r'\benergia\b', r'\b[áa]gua\b', r'\bluz\b'],
-  'saude': [r'\bfarm[áa]cia\b', r'\bm[eé]dic[o]\b', r'\brem[eé]di[o]\b', r'\bdentista\b', r'\bconsulta\b', r'\bexame\b', r'\bplano\s+de\s+sa[úu]de\b', r'\bplano\b'],
-  'lazer': [r'\bcinema\b', r'\bstreaming\b', r'\bacademia\b', r'\bnetflix\b', r'\bspotify\b', r'\bjogo\b', r'\baposta[s]?\b', r'\bcassino\b'],
-  'vestuario': [r'\broupa\b', r'\bsapato\b', r'\bcamisa\b', r'\bcal[cç]a\b', r'\bmoleton\b', r'\bcamiseta\b', r'\bt[eê]nis\b', r'\bacess[óo]ri[o]\b'],
+  'moradia': [r'\baluguel\b', r'\bcondom[ií]nio\b', r'\bcondominio\b', r'\biptu\b', r'\benergia\b', r'\b[áa]gua\b', r'\bluz\b', r'\bg[aá]s\b'],
+  'saude': [r'\bfarm[áa]cia\b', r'\bm[eé]dic[o]\b', r'\brem[eé]di[o]\b', r'\bdentista\b', r'\bconsulta\b', r'\bexame\b', r'\bplano\s+de\s+sa[úu]de\b', r'\bplano\b',
+            r'\bhospital\b', r'\bpsicol[óo]g[oa]\b', r'\bpsiquiatr[ao]\b', r'\boftalmolog[iaoa]\b', r'\boftalmo\b', r'\bfisioterapia\b', r'\bvacina\b', r'\bveterin[áa]rio\b'],
+  'lazer': [r'\bcinema\b', r'\bstreaming\b', r'\bacademia\b', r'\bnetflix\b', r'\bspotify\b', r'\bjogo\b', r'\baposta[s]?\b', r'\bcassino\b',
+            r'\bgloboplay\b', r'\bhbo\s*max\b', r'\bprime\s*video\b', r'\bparamount\b', r'\bstar\s*plus\b', r'\bdisney\b', r'\bshow\b', r'\bteatro\b'],
+  'vestuario': [r'\broupa\b', r'\bsapato\b', r'\bcamisa\b', r'\bcal[cç]a\b', r'\bmoleton\b', r'\bcamiseta\b', r'\bt[eê]nis\b', r'\bacess[óo]ri[o]\b',
+               r'\brenner\b', r'\briachuelo\b', r'\bc&a\b', r'\bcea\b', r'\bmarisa\b'],
   'servicos': [
     r'\bassinatura\b', r'\bservi[cç]o\b', r'\binternet\b', r'\btelefonia\b', r'\bcabeleireiro\b', r'\bbarbearia\b', r'\bsal[aã]o\b', r'\bmanicure\b', r'\bpedicure\b',
-    r'\bplano\b', r'\btv\b', r'\bnet\b', r'\bvivo\b', r'\bclaro\b', r'\boi\b', r'\bprime\b', r'\bdisney\b', r'\bicloud\b', r'\bgoogle\s+one\b', r'\bspotify\b', r'\byoutube\b'
+    r'\bplano\b', r'\btv\b', r'\bnet\b', r'\bvivo\b', r'\bclaro\b', r'\boi\b', r'\bprime\b', r'\bdisney\b', r'\bicloud\b', r'\bgoogle\s+one\b', r'\bspotify\b', r'\byoutube\b',
+    r'\btarifa\b', r'\banuidade\b', r'\bcart[aã]o\b', r'\bbanco\b', r'\bcart[óo]rio\b', r'\bcorreios\b', r'\bpicpay\b', r'\bpaypal\b', r'\brecargapay\b'
   ],
-  'salario': [r'\bsal[áa]rio\b', r'\bsalario\b', r'\bfreela\b'],
+  'salario': [r'\bsal[áa]rio\b', r'\bsalario\b', r'\bfreela\b', r'\bpro\s*labore\b', r'\bprolabore\b', r'\bcomiss[aã]o\b'],
   'vendas': [r'\bvendi\b', r'\bvenda[s]?\b', r'\bvendas\b'],
 }
 
@@ -46,21 +52,21 @@ def detect_category_with_confidence(text, verb=None):
             if not re.search(r'(netflix|prime|disney|spotify|youtube|telefonia|vivo|claro|oi|internet)', t, re.IGNORECASE):
                 if not re.search(r'(mercado|supermercado|farm[áa]cia|restaurante|padaria|posto|uber|gasolina|combust[ií]vel|aluguel|condom[ií]nio|energia|[áa]gua|luz)', t, re.IGNORECASE):
                     return 'outros', 0.4
-    # Exact keyword matches with word boundaries
+    conf_map = {
+        'alimentacao': 0.97, 'transporte': 0.96, 'moradia': 0.97, 'saude': 0.96,
+        'lazer': 0.95, 'vestuario': 0.94, 'servicos': 0.94, 'salario': 0.98, 'vendas': 0.90
+    }
     for cat, patterns in CATEGORY_PATTERNS.items():
         for pat in patterns:
             if re.search(pat, t, re.IGNORECASE):
-                # High confidence for exact pattern hit
-                return cat, 0.95
+                return cat, conf_map.get(cat, 0.95)
     # Additional explicit signals
     if re.search(r'\bsal[áa]rio\b|\bcontracheque\b|\bholerite\b|\bfolha\b', t, re.IGNORECASE):
-        return 'salario', 0.95
+        return 'salario', 0.98
     if re.search(r'\bvend\w*\b', t, re.IGNORECASE):
-        return 'vendas', 0.8
+        return 'vendas', 0.9
     if re.search(r'\bpix\b', t, re.IGNORECASE) or re.search(r'\btransfer\w*\b', t, re.IGNORECASE) or re.search(r'\bdep[óo]sito\b', t, re.IGNORECASE):
-        # PIX/transfer/deposito is ambiguous without context
         return 'outros', 0.4
-    # Verb-based default as very low confidence
     if verb:
         v = verb.lower()
         if v in VERB_CATEGORY_DEFAULT:
