@@ -567,7 +567,12 @@ async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
         count = 0
         for it in transacoes or []:
             cat = str(it.get("categoria", "outros") or "outros").strip().lower()
-            pend = bool(it.get("pendente_confirmacao", False)) or (cat in ("duvida", "outros"))
+            conf = 0.0
+            try:
+                conf = float(it.get("confidence_score", 0.0) or 0.0)
+            except:
+                conf = 0.0
+            pend = (cat in ("duvida", "outros")) or (conf < 0.95) or bool(it.get("pendente_confirmacao", False))
             if not pend:
                 continue
             tp_n = str(it.get("tipo", "0")).strip()
@@ -1148,22 +1153,43 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
             await query.edit_message_text(f"⚠️ {md_escape(err)}", parse_mode='Markdown', reply_markup=kb)
             return
-        dd = data.get("totais_dia", {})
-        mm = data.get("totais_mes", {})
-        resp = criar_cabecalho("CATEGORIA ATUALIZADA", 40)
-        caixa = ""
-        caixa += "+" + ("-" * 28) + "+\n"
-        caixa += f"|{criar_linha_tabela('DIA - SALDO:', formatar_moeda(dd.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-        caixa += f"|{criar_linha_tabela('DIA - DESPESAS:', formatar_moeda(dd.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-        caixa += f"|{criar_linha_tabela('DIA - RECEITAS:', formatar_moeda(dd.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-        caixa += "+" + ("-" * 28) + "+\n"
-        caixa += f"|{criar_linha_tabela('MÊS - SALDO:', formatar_moeda(mm.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-        caixa += f"|{criar_linha_tabela('MÊS - DESPESAS:', formatar_moeda(mm.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-        caixa += f"|{criar_linha_tabela('MÊS - RECEITAS:', formatar_moeda(mm.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-        caixa += "+" + ("-" * 28) + "+"
-        resp += wrap_code_block(caixa) + "\n\n"
-        resp += "📊 Use /total para ver os totais atualizados"
-        await query.edit_message_text(resp, parse_mode='Markdown')
+        try:
+            up = data.get("atualizacao", {}) or {}
+            rid = str(up.get("ref_id") or ref_id or "")
+            nova = str(up.get("categoria_nova") or cat)
+            ltb = context.user_data.get("last_tx_block") or {}
+            items = list(ltb.get("items", []) or [])
+            for it in items:
+                if str(it.get("ref_id") or "") == rid:
+                    it["categoria"] = nova
+                    try:
+                        key = _normalize_ascii(clean_desc(str(it.get("descricao", ""))))
+                        mem = context.user_data.get("cat_memory", {}) or {}
+                        mem[key] = nova
+                        context.user_data["cat_memory"] = mem
+                    except:
+                        pass
+            resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
+            resposta += f"\n✅ *{len(items)} transação(ões) registrada(s)*\n\n"
+            for it in items:
+                tp = str(it.get('tipo', '')).strip().lower()
+                emoji = "🔴" if tp in ('saida', '0') else "🟢"
+                tipo = "DESPESA" if tp in ('saida', '0') else "RECEITA"
+                cat_nome = md_escape(CATEGORY_NAMES.get(it.get('categoria', 'outros'), it.get('categoria', 'outros')))
+                desc_json = str(it.get('descricao', ''))
+                resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(it.get('valor', 0)))}\n"
+                resposta += f"   `{desc_json}`\n"
+                resposta += f"   Categoria: {cat_nome}\n\n"
+            chat_id = ltb.get("chat_id")
+            message_id = ltb.get("message_id")
+            if chat_id and message_id:
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=resposta, parse_mode='Markdown')
+        except:
+            pass
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=query.message.message_id)
+        except:
+            pass
     elif query.data.startswith("cat_yes:"):
         try:
             _, ref_id, tipo = query.data.split(":", 2)
@@ -1197,7 +1223,10 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
             await query.edit_message_text(f"⚠️ {md_escape(err)}", parse_mode='Markdown', reply_markup=kb)
             return
-        await query.edit_message_text("Categoria mantida.", parse_mode='Markdown')
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=query.message.message_id)
+        except:
+            pass
     elif query.data.startswith("categoria_digitar:"):
         try:
             _, ref_id, tipo = query.data.split(":", 2)
@@ -1208,6 +1237,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             return
         try:
             context.user_data["cat_input"] = {"ref_id": ref_id, "tipo": tipo}
+        except:
+            pass
+        try:
+            context.user_data["last_cat_prompt_message_id"] = query.message.message_id
+            context.user_data["last_cat_prompt_chat_id"] = query.message.chat_id
         except:
             pass
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancelar", callback_data="confirm_categoria_cancelar")]])
@@ -2869,26 +2903,58 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                 context.user_data.pop("cat_input", None)
             except:
                 pass
-            if not data.get("sucesso"):
-                kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
-                await update.message.reply_text("⚠️ Não foi possível atualizar a categoria.", parse_mode='Markdown', reply_markup=kb)
-                return
-            dd = data.get("totais_dia", {})
-            mm = data.get("totais_mes", {})
-            resp = criar_cabecalho("CATEGORIA ATUALIZADA", 40)
-            caixa = ""
-            caixa += "+" + ("-" * 28) + "+\n"
-            caixa += f"|{criar_linha_tabela('DIA - SALDO:', formatar_moeda(dd.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-            caixa += f"|{criar_linha_tabela('DIA - DESPESAS:', formatar_moeda(dd.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-            caixa += f"|{criar_linha_tabela('DIA - RECEITAS:', formatar_moeda(dd.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-            caixa += "+" + ("-" * 28) + "+\n"
-            caixa += f"|{criar_linha_tabela('MÊS - SALDO:', formatar_moeda(mm.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-            caixa += f"|{criar_linha_tabela('MÊS - DESPESAS:', formatar_moeda(mm.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-            caixa += f"|{criar_linha_tabela('MÊS - RECEITAS:', formatar_moeda(mm.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-            caixa += "+" + ("-" * 28) + "+"
-            resp += wrap_code_block(caixa) + "\n\n"
-            resp += "📊 Use /total para ver os totais atualizados"
-            await update.message.reply_text(resp, parse_mode='Markdown')
+        if not data.get("sucesso"):
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
+            await update.message.reply_text("⚠️ Não foi possível atualizar a categoria.", parse_mode='Markdown', reply_markup=kb)
+            return
+            try:
+                up = data.get("atualizacao", {})
+            except:
+                up = {}
+            try:
+                rid = str(up.get("ref_id") or ref_id or "")
+                nova = str(up.get("categoria_nova") or use_cat)
+                ltb = context.user_data.get("last_tx_block") or {}
+                items = list(ltb.get("items", []) or [])
+                for it in items:
+                    if str(it.get("ref_id") or "") == rid:
+                        it["categoria"] = nova
+                        try:
+                            key = _normalize_ascii(clean_desc(str(it.get("descricao", ""))))
+                            mem = context.user_data.get("cat_memory", {}) or {}
+                            mem[key] = nova
+                            context.user_data["cat_memory"] = mem
+                        except:
+                            pass
+                resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA", 40)
+                resposta += f"\n✅ *{len(items)} transação(ões) registrada(s)*\n\n"
+                for it in items:
+                    tp = str(it.get('tipo', '')).strip().lower()
+                    emoji = "🔴" if tp in ('saida', '0') else "🟢"
+                    tipo = "DESPESA" if tp in ('saida', '0') else "RECEITA"
+                    cat_nome = md_escape(CATEGORY_NAMES.get(it.get('categoria', 'outros'), it.get('categoria', 'outros')))
+                    desc_json = str(it.get('descricao', ''))
+                    resposta += f"{emoji} *{tipo}:* {formatar_moeda(float(it.get('valor', 0)))}\n"
+                    resposta += f"   `{desc_json}`\n"
+                    resposta += f"   Categoria: {cat_nome}\n\n"
+                chat_id = ltb.get("chat_id")
+                message_id = ltb.get("message_id")
+                if chat_id and message_id:
+                    await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=resposta, parse_mode='Markdown')
+            except:
+                pass
+            try:
+                pmid = context.user_data.get("last_cat_prompt_message_id")
+                pchat = context.user_data.get("last_cat_prompt_chat_id")
+                if pmid and pchat:
+                    await context.bot.delete_message(chat_id=pchat, message_id=pmid)
+            except:
+                pass
+            try:
+                context.user_data.pop("last_cat_prompt_message_id", None)
+                context.user_data.pop("last_cat_prompt_chat_id", None)
+            except:
+                pass
             return
         except:
             try:
@@ -3019,6 +3085,21 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             try:
                 cid = str(update.effective_chat.id)
                 await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
+                try:
+                    mem = context.user_data.get("cat_memory", {})
+                except:
+                    mem = {}
+                try:
+                    for it in transacoes:
+                        try:
+                            key = _normalize_ascii(clean_desc(str(it.get('descricao', ''))))
+                            mc = mem.get(key)
+                            if mc and mc not in ("outros", "duvida"):
+                                it['categoria'] = mc
+                        except:
+                            pass
+                except:
+                    pass
                 salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
             except:
                 arq = None
@@ -3035,11 +3116,44 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                     if re.search(r'(?:\b(?:de|da|do|das|dos|para)\s*)$', tl):
                         return True
                     return False
-                precisa_ai = any(_desc_confusa(str(it.get('descricao', ''))) for it in transacoes)
+                baixa_conf = False
+                try:
+                    baixa_conf = any(
+                        (str(it.get('categoria', 'outros')).strip().lower() in ('outros', 'duvida')) or
+                        (float(it.get('confidence_score', 0.0) or 0.0) < 0.95)
+                        for it in transacoes
+                    )
+                except:
+                    baixa_conf = True
+                precisa_ai = any(_desc_confusa(str(it.get('descricao', ''))) for it in transacoes) or baixa_conf
                 if precisa_ai and _gemini_ok():
                     from app.services.extractor import extrair_informacoes_financeiras
                     ai_trans = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
-                    transacoes = (transacoes or []) + ai_trans
+                    try:
+                        ai_idx = {}
+                        for ai in ai_trans or []:
+                            k = (str(ai.get('tipo', '')).strip(), float(ai.get('valor', 0)))
+                            ai_idx[k] = ai
+                        for it in transacoes or []:
+                            try:
+                                k = (str(it.get('tipo', '')).strip(), float(it.get('valor', 0)))
+                                cand = ai_idx.get(k)
+                                if cand and str(cand.get('categoria', 'outros')).strip().lower() not in ('outros', 'duvida'):
+                                    it['categoria'] = str(cand.get('categoria')).strip().lower()
+                                    try:
+                                        conf = float(cand.get('confidence_score', 0.95) or 0.95)
+                                        it['confidence_score'] = conf
+                                        it['pendente_confirmacao'] = False if conf >= 0.95 else True
+                                    except:
+                                        pass
+                                    try:
+                                        it['descricao'] = naturalize_description(str(it.get('tipo', '')), str(it.get('categoria', '')), clean_desc(str(it.get('descricao', ''))))
+                                    except:
+                                        pass
+                            except:
+                                pass
+                    except:
+                        pass
             except:
                 pass
         else:
@@ -3068,6 +3182,42 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                     salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
                 except:
                     arq = None
+        try:
+            baixa_conf = any(
+                (str(it.get('categoria', 'outros')).strip().lower() in ('outros', 'duvida')) or
+                (float(it.get('confidence_score', 0.0) or 0.0) < 0.95)
+                for it in transacoes
+            )
+        except:
+            baixa_conf = True
+        if baixa_conf and _gemini_ok():
+            try:
+                from app.services.extractor import extrair_informacoes_financeiras
+                ai_trans2 = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
+                ai_idx2 = {}
+                for ai in ai_trans2 or []:
+                    k = (str(ai.get('tipo', '')).strip(), float(ai.get('valor', 0)))
+                    ai_idx2[k] = ai
+                for it in transacoes or []:
+                    try:
+                        k = (str(it.get('tipo', '')).strip(), float(it.get('valor', 0)))
+                        cand = ai_idx2.get(k)
+                        if cand and str(cand.get('categoria', 'outros')).strip().lower() not in ('outros', 'duvida'):
+                            it['categoria'] = str(cand.get('categoria')).strip().lower()
+                            try:
+                                conf = float(cand.get('confidence_score', 0.95) or 0.95)
+                                it['confidence_score'] = conf
+                                it['pendente_confirmacao'] = False if conf >= 0.95 else True
+                            except:
+                                pass
+                            try:
+                                it['descricao'] = naturalize_description(str(it.get('tipo', '')), str(it.get('categoria', '')), clean_desc(str(it.get('descricao', ''))))
+                            except:
+                                pass
+                    except:
+                        pass
+            except:
+                pass
         dedup = {}
         for item in transacoes:
             tipo_n = str(item.get('tipo')).strip()
@@ -3148,51 +3298,40 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
-        resposta += "📊 *Use /total para ver os totais atualizados*"
-        
-        keyboard = [
-            [InlineKeyboardButton("💰 VER TOTAIS DO DIA", callback_data="total_dia")],
-            [InlineKeyboardButton("📊 VER RESUMO", callback_data="resumo")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
             text=resposta,
             parse_mode='Markdown',
-        reply_markup=reply_markup
         )
+        try:
+            idx = {}
+            for s in salvas_coletadas or []:
+                k = (("saida" if str(s.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"), float(s.get("valor", 0)), str(s.get("categoria", "")).strip().lower())
+                idx[k] = s
+            items = []
+            for it in transacoes:
+                tp_txt = "saida" if str(it.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"
+                k = (tp_txt, float(it.get("valor", 0)), str(it.get("categoria", "")).strip().lower())
+                rid = (idx.get(k) or {}).get("ref_id")
+                items.append({
+                    "ref_id": rid,
+                    "tipo": tp_txt,
+                    "valor": float(it.get("valor", 0)),
+                    "categoria": str(it.get("categoria", "")).strip().lower(),
+                    "descricao": str(it.get("descricao", ""))
+                })
+            context.user_data["last_tx_block"] = {
+                "chat_id": processing_msg.chat_id,
+                "message_id": processing_msg.message_id,
+                "items": items
+            }
+        except:
+            pass
         try:
             asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_coletadas))
         except:
             pass
-        async def _enviar_totais():
-            try:
-                qs = build_cliente_query_params(update)
-                t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
-                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
-                extrato, sj = await asyncio.gather(t1, t2)
-                if extrato.get("sucesso"):
-                    tot = extrato.get("total", {})
-                    caixa = ""
-                    caixa += "+" + ("-" * 28) + "+\n"
-                    caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-                    caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-                    caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-                    caixa += "+" + ("-" * 28) + "+"
-                    msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa) + "\n\n"
-                    try:
-                        if sj.get("sucesso"):
-                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
-                            msg += f"💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
-                    except:
-                        pass
-                    msg += "📊 *Use /total para ver os totais atualizados*"
-                    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
-            except:
-                pass
-        asyncio.create_task(_enviar_totais())
         _bg_semaphore.release()
     except:
         try:
@@ -3368,6 +3507,35 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             transacoes = list(dedup.values())
         except:
             pass
+        try:
+            mem = context.user_data.get("cat_memory", {})
+        except:
+            mem = {}
+        try:
+            idx_u = {}
+            for s in (data.get("salvas", []) if isinstance(data, dict) else []):
+                k = (("saida" if str(s.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"), float(s.get("valor", 0)), str(s.get("categoria", "")).strip().lower())
+                idx_u[k] = s
+            for t in transacoes:
+                try:
+                    key = _normalize_ascii(clean_desc(str(t.get("descricao", ""))))
+                    mc = mem.get(key)
+                    if mc and mc not in ("outros", "duvida"):
+                        tp_txt = "saida" if str(t.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"
+                        k = (tp_txt, float(t.get("valor", 0)), str(t.get("categoria", "")).strip().lower())
+                        sref = idx_u.get(k)
+                        rid = sref.get("ref_id") if sref else None
+                        if rid:
+                            payload = {"cliente_id": get_cliente_id(update), "referencia_id": rid, "nova_categoria": mc}
+                            try:
+                                requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=6)
+                            except:
+                                pass
+                        t["categoria"] = mc
+                except:
+                    pass
+        except:
+            pass
         resposta = criar_cabecalho("TRANSAÇÃO REGISTRADA (IMAGEM)", 40)
         resposta += f"\n✅ *{len(transacoes)} transação(ões) registrada(s)*\n\n"
         for t in transacoes:
@@ -3382,50 +3550,41 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
-        resposta += "📊 *Use /total para ver os totais atualizados*"
-        keyboard = [
-            [InlineKeyboardButton("💰 VER TOTAIS DO DIA", callback_data="total_dia")],
-            [InlineKeyboardButton("📊 VER RESUMO", callback_data="resumo")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.edit_message_text(
             chat_id=processing_msg.chat_id,
             message_id=processing_msg.message_id,
             text=resposta,
             parse_mode='Markdown',
-            reply_markup=reply_markup
         )
         try:
             salvas_img = (data.get("salvas", []) if isinstance(data, dict) else []) or []
             asyncio.create_task(_disparar_confirmacoes(update, context, transacoes, salvas_img))
         except:
             pass
-        async def _enviar_totais_img():
-            try:
-                qs = build_cliente_query_params(update)
-                t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
-                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
-                extrato, sj = await asyncio.gather(t1, t2)
-                if extrato.get("sucesso"):
-                    tot = extrato.get("total", {})
-                    caixa = ""
-                    caixa += "+" + ("-" * 28) + "+\n"
-                    caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(tot.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
-                    caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(tot.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
-                    caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
-                    caixa += "+" + ("-" * 28) + "+"
-                    msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa)
-                    try:
-                        if sj.get("sucesso"):
-                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
-                            msg += f"\n\n💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
-                    except:
-                        pass
-                    msg += "📊 *Use /total para ver os totais atualizados*"
-                    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
-            except:
-                pass
-        asyncio.create_task(_enviar_totais_img())
+        try:
+            idx = {}
+            for s in salvas_img or []:
+                k = (("saida" if str(s.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"), float(s.get("valor", 0)), str(s.get("categoria", "")).strip().lower())
+                idx[k] = s
+            items = []
+            for it in transacoes:
+                tp_txt = "saida" if str(it.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"
+                k = (tp_txt, float(it.get("valor", 0)), str(it.get("categoria", "")).strip().lower())
+                rid = (idx.get(k) or {}).get("ref_id")
+                items.append({
+                    "ref_id": rid,
+                    "tipo": tp_txt,
+                    "valor": float(it.get("valor", 0)),
+                    "categoria": str(it.get("categoria", "")).strip().lower(),
+                    "descricao": str(it.get("descricao", ""))
+                })
+            context.user_data["last_tx_block"] = {
+                "chat_id": processing_msg.chat_id,
+                "message_id": processing_msg.message_id,
+                "items": items
+            }
+        except:
+            pass
         _bg_semaphore.release()
     except:
         try:
