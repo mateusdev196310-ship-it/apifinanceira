@@ -3283,8 +3283,6 @@ def main() -> None:
         pass
     application.run_polling(drop_pending_updates=True)
 
-if __name__ == '__main__':
-    main()
 async def processar_mensagem_imagem(update: Update, context: CallbackContext):
     msg = update.message
     processing_msg = await msg.reply_text("✅ Recebi, estou processando imagem...")
@@ -3972,6 +3970,8 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             _bg_semaphore.release()
         except:
             pass
+if __name__ == '__main__':
+    main()
 async def processar_mensagem_audio(update: Update, context: CallbackContext):
     msg = update.message
     processing_msg = await msg.reply_text("🔄 Processando áudio...")
