@@ -7,6 +7,8 @@ import re
 from datetime import datetime, timedelta, timezone, time as dt_time
 import calendar
 import asyncio
+import difflib
+import unicodedata
 from collections import defaultdict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
@@ -484,9 +486,64 @@ def md_escape(s: str) -> str:
         .replace('!', '\\!')
     )
 
-def _categoria_keyboard(ref_id: str):
+def _normalize_ascii(s: str) -> str:
+    try:
+        return unicodedata.normalize('NFKD', str(s)).encode('ascii', 'ignore').decode('ascii').lower().strip()
+    except:
+        return str(s or '').lower().strip()
+def _map_text_to_category(texto: str) -> str:
+    tx = _normalize_ascii(texto)
+    if not tx:
+        return "outros"
+    for k, v in CATEGORY_NAMES.items():
+        if tx == _normalize_ascii(k) or tx == _normalize_ascii(v):
+            return k
+    for k, v in CATEGORY_NAMES.items():
+        if _normalize_ascii(k) in tx or _normalize_ascii(v).split()[0] in tx:
+            return k
+    keys = list(CATEGORY_NAMES.keys())
+    try:
+        best = max(keys, key=lambda k: difflib.SequenceMatcher(a=tx, b=_normalize_ascii(k)).ratio())
+        if difflib.SequenceMatcher(a=tx, b=_normalize_ascii(best)).ratio() >= 0.6:
+            return best
+    except:
+        pass
+    try:
+        from app.services.rule_based import detect_category_with_confidence
+        cat, conf = detect_category_with_confidence(texto)
+        if conf >= 0.5:
+            return cat
+    except:
+        pass
+    return "outros"
+def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 6):
+    try:
+        db = get_db()
+        root = db.collection("clientes").document(str(cliente_id))
+        mk = _month_key_sp()
+        mm = root.collection("meses").document(mk).get().to_dict() or {}
+        campo = "categorias_entrada" if str(tipo).strip().lower() in ("entrada", "1", "receita") else "categorias_saida"
+        cats = dict(mm.get(campo, {}) or {})
+        items = sorted(((k, float(v or 0)) for k, v in cats.items()), key=lambda x: (-x[1], x[0]))
+        lst = [k for k, _ in items if k in CATEGORY_LIST and k not in ("duvida", "outros")]
+        return lst[:limit]
+    except:
+        return []
+def _categoria_keyboard(ref_id: str, tipo: str, chat_id: str):
     cats = [c for c in CATEGORY_LIST if c not in ("duvida",)]
+    usados = _top_categorias_cliente(chat_id, tipo, limit=6)
+    usados = [c for c in usados if c in cats]
     rows = []
+    if usados:
+        row_u = []
+        for c in usados:
+            label = CATEGORY_NAMES.get(c, c)
+            row_u.append(InlineKeyboardButton(label, callback_data=f"confirm_categoria:{ref_id}:{c}"))
+            if len(row_u) >= 3:
+                rows.append(row_u)
+                row_u = []
+        if row_u:
+            rows.append(row_u)
     row = []
     for c in cats:
         label = CATEGORY_NAMES.get(c, c)
@@ -496,6 +553,7 @@ def _categoria_keyboard(ref_id: str):
             row = []
     if row:
         rows.append(row)
+    rows.append([InlineKeyboardButton("📝 Digitar categoria", callback_data=f"categoria_digitar:{ref_id}:{tipo}")])
     rows.append([InlineKeyboardButton("❌ Cancelar", callback_data="confirm_categoria_cancelar")])
     return InlineKeyboardMarkup(rows)
 
@@ -524,12 +582,17 @@ async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
             desc = str(it.get("descricao", "") or "")
             valor = float(it.get("valor", 0) or 0)
             cat_nome = md_escape(CATEGORY_NAMES.get(cat, cat))
-            texto = criar_cabecalho("CONFIRMAR CATEGORIA", 40)
+            texto = criar_cabecalho("CATEGORIZAÇÃO", 40)
             texto += f"\n{emoji} {formatar_moeda(valor)}\n"
             texto += f"`{desc}`\n"
-            texto += f"Categoria sugerida: {cat_nome}\n"
+            texto += f"Categoria atual/sugerida: {cat_nome}\n"
+            texto += f"\nDeseja categorizar?"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Sim", callback_data=f"cat_yes:{rid}:{tp_txt}"),
+                 InlineKeyboardButton("❌ Não", callback_data=f"cat_no:{rid}:{cat}")]
+            ])
             try:
-                await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode='Markdown', reply_markup=_categoria_keyboard(rid))
+                await context.bot.send_message(chat_id=chat_id, text=texto, parse_mode='Markdown', reply_markup=kb)
             except:
                 pass
             count += 1
@@ -1101,6 +1164,54 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         resp += wrap_code_block(caixa) + "\n\n"
         resp += "📊 Use /total para ver os totais atualizados"
         await query.edit_message_text(resp, parse_mode='Markdown')
+    elif query.data.startswith("cat_yes:"):
+        try:
+            _, ref_id, tipo = query.data.split(":", 2)
+        except Exception:
+            ref_id, tipo = None, None
+        if not (ref_id and tipo):
+            await query.edit_message_text("⚠️ Dados inválidos.", parse_mode='Markdown')
+            return
+        kb = _categoria_keyboard(ref_id, tipo, get_cliente_id(query))
+        await query.edit_message_text("Selecione a categoria ou digite uma nova:", parse_mode='Markdown', reply_markup=kb)
+    elif query.data.startswith("cat_no:"):
+        try:
+            _, ref_id, cat = query.data.split(":", 2)
+        except Exception:
+            ref_id, cat = None, None
+        if not (ref_id and cat):
+            await query.edit_message_text("⚠️ Dados inválidos.", parse_mode='Markdown')
+            return
+        payload = {
+            "cliente_id": get_cliente_id(query),
+            "referencia_id": ref_id,
+            "nova_categoria": cat,
+        }
+        try:
+            r = requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=8)
+            data = r.json() if r.ok else {"sucesso": False}
+        except:
+            data = {"sucesso": False}
+        if not data.get("sucesso"):
+            err = str(data.get("erro", "Falha ao confirmar categoria."))
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
+            await query.edit_message_text(f"⚠️ {md_escape(err)}", parse_mode='Markdown', reply_markup=kb)
+            return
+        await query.edit_message_text("Categoria mantida.", parse_mode='Markdown')
+    elif query.data.startswith("categoria_digitar:"):
+        try:
+            _, ref_id, tipo = query.data.split(":", 2)
+        except Exception:
+            ref_id, tipo = None, None
+        if not (ref_id and tipo):
+            await query.edit_message_text("⚠️ Dados inválidos.", parse_mode='Markdown')
+            return
+        try:
+            context.user_data["cat_input"] = {"ref_id": ref_id, "tipo": tipo}
+        except:
+            pass
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancelar", callback_data="confirm_categoria_cancelar")]])
+        await query.edit_message_text("Digite o nome da categoria:", parse_mode='Markdown', reply_markup=kb)
     elif query.data == "confirm_categoria_cancelar":
         await query.edit_message_text("Operação cancelada.", parse_mode='Markdown')
     elif query.data.startswith("estornar_confirmar:") or query.data.startswith("estornar_escolher:"):
@@ -2733,6 +2844,60 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
     texto = update.message.text
     if texto.startswith('/'):
         return
+    try:
+        cat_ctx = context.user_data.get("cat_input")
+    except:
+        cat_ctx = None
+    if cat_ctx:
+        try:
+            ref_id = str(cat_ctx.get("ref_id") or "")
+            tipo = str(cat_ctx.get("tipo") or "")
+            cat_txt = str(texto or "").strip()
+            mapped = _map_text_to_category(cat_txt)
+            use_cat = mapped if mapped not in ("outros", "duvida") else (_normalize_ascii(cat_txt) if len(_normalize_ascii(cat_txt)) >= 3 else "outros")
+            payload = {
+                "cliente_id": get_cliente_id(update),
+                "referencia_id": ref_id,
+                "nova_categoria": use_cat,
+            }
+            try:
+                r = requests.post(f"{API_URL}/transacoes/atualizar_categoria", json=payload, timeout=8)
+                data = r.json() if r.ok else {"sucesso": False}
+            except:
+                data = {"sucesso": False}
+            try:
+                context.user_data.pop("cat_input", None)
+            except:
+                pass
+            if not data.get("sucesso"):
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
+                await update.message.reply_text("⚠️ Não foi possível atualizar a categoria.", parse_mode='Markdown', reply_markup=kb)
+                return
+            dd = data.get("totais_dia", {})
+            mm = data.get("totais_mes", {})
+            resp = criar_cabecalho("CATEGORIA ATUALIZADA", 40)
+            caixa = ""
+            caixa += "+" + ("-" * 28) + "+\n"
+            caixa += f"|{criar_linha_tabela('DIA - SALDO:', formatar_moeda(dd.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+            caixa += f"|{criar_linha_tabela('DIA - DESPESAS:', formatar_moeda(dd.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+            caixa += f"|{criar_linha_tabela('DIA - RECEITAS:', formatar_moeda(dd.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+            caixa += "+" + ("-" * 28) + "+\n"
+            caixa += f"|{criar_linha_tabela('MÊS - SALDO:', formatar_moeda(mm.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
+            caixa += f"|{criar_linha_tabela('MÊS - DESPESAS:', formatar_moeda(mm.get('despesas', 0), negrito=False), True, '', largura=28)}|\n"
+            caixa += f"|{criar_linha_tabela('MÊS - RECEITAS:', formatar_moeda(mm.get('receitas', 0), negrito=False), True, '', largura=28)}|\n"
+            caixa += "+" + ("-" * 28) + "+"
+            resp += wrap_code_block(caixa) + "\n\n"
+            resp += "📊 Use /total para ver os totais atualizados"
+            await update.message.reply_text(resp, parse_mode='Markdown')
+            return
+        except:
+            try:
+                context.user_data.pop("cat_input", None)
+            except:
+                pass
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MENU", callback_data="menu")]])
+            await update.message.reply_text("⚠️ Erro ao aplicar categoria digitada.", parse_mode='Markdown', reply_markup=kb)
+            return
     
     intent = _detectar_intencao(texto)
     if intent:
