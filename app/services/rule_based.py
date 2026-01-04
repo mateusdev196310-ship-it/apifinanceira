@@ -16,7 +16,7 @@ CATEGORY_PATTERNS = {
   'lazer': [r'\bcinema\b', r'\bstreaming\b', r'\bacademia\b', r'\bnetflix\b', r'\bspotify\b', r'\bjogo\b', r'\baposta[s]?\b', r'\bcassino\b'],
   'vestuario': [r'\broupa\b', r'\bsapato\b', r'\bcamisa\b', r'\bcal[cç]a\b', r'\bmoleton\b', r'\bcamiseta\b', r'\bt[eê]nis\b', r'\bacess[óo]ri[o]\b'],
   'servicos': [
-    r'\bconta\b', r'\bassinatura\b', r'\bservi[cç]o\b', r'\binternet\b', r'\btelefonia\b', r'\bcabeleireiro\b', r'\bbarbearia\b', r'\bsal[aã]o\b', r'\bmanicure\b', r'\bpedicure\b',
+    r'\bassinatura\b', r'\bservi[cç]o\b', r'\binternet\b', r'\btelefonia\b', r'\bcabeleireiro\b', r'\bbarbearia\b', r'\bsal[aã]o\b', r'\bmanicure\b', r'\bpedicure\b',
     r'\bplano\b', r'\btv\b', r'\bnet\b', r'\bvivo\b', r'\bclaro\b', r'\boi\b', r'\bprime\b', r'\bdisney\b', r'\bicloud\b', r'\bgoogle\s+one\b', r'\bspotify\b', r'\byoutube\b'
   ],
   'salario': [r'\bsal[áa]rio\b', r'\bsalario\b', r'\bfreela\b'],
@@ -42,6 +42,10 @@ def detect_category_with_confidence(text, verb=None):
         if re.search(r'assinatura\s+eletr[ôo]nica', t, re.IGNORECASE) or re.search(r'assinatura\s+digital', t, re.IGNORECASE) or re.search(r'\binternet\s+banking\b', t, re.IGNORECASE):
             if not re.search(r'(mercado|supermercado|farm[áa]cia|restaurante|padaria|posto|uber|gasolina|combust[ií]vel|aluguel|condom[ií]nio|energia|[áa]gua|luz)', t, re.IGNORECASE):
                 return 'outros', 0.4
+        if re.search(r'\bservi[çc]o\b', t, re.IGNORECASE):
+            if not re.search(r'(netflix|prime|disney|spotify|youtube|telefonia|vivo|claro|oi|internet)', t, re.IGNORECASE):
+                if not re.search(r'(mercado|supermercado|farm[áa]cia|restaurante|padaria|posto|uber|gasolina|combust[ií]vel|aluguel|condom[ií]nio|energia|[áa]gua|luz)', t, re.IGNORECASE):
+                    return 'outros', 0.4
     # Exact keyword matches with word boundaries
     for cat, patterns in CATEGORY_PATTERNS.items():
         for pat in patterns:
