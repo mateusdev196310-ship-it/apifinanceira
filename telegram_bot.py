@@ -2226,7 +2226,7 @@ async def categorias_mes(query, context):
                 pass
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        largura = 36
+        largura = 40
         resposta += "DESPESAS\n\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
