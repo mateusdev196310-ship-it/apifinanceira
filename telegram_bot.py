@@ -2092,10 +2092,15 @@ async def categorias_mes(query, context):
         qs = build_cliente_query_params(query)
         cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
+        cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
         try:
-            geral_api = await _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4)
+            geral_api, cat_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
+                _req_json_cached_async(cat_group_url, f"catgrp:{cid}:{mkey}", ttl=10, timeout=5),
+            )
         except:
             geral_api = {}
+            cat_api = {}
         transacoes = []
         try:
             db = get_db()
@@ -2153,30 +2158,56 @@ async def categorias_mes(query, context):
             d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
             r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
             return r - d
-        ordenadas = sorted(((k, v) for k, v in grupos.items()), key=lambda x: (-sum(float(it.get('valor', 0) or 0) for it in x[1] if it.get('tipo') == 'saida'), x[0]))
-        ordenadas = ordenadas[:8] if len(ordenadas) > 8 else ordenadas
         resposta = criar_cabecalho("RESUMO DO MÊS", 40)
         resposta += f"\n📅 {data_str}\n\n"
-        tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
-        tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
+        tot_despesas = 0.0
+        tot_receitas = 0.0
         mapa_desp = {}
         mapa_rec = {}
-        for k, lst in grupos.items():
-            dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-            rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-            if dd > 0:
-                mapa_desp[k] = dd
-            if rr > 0:
-                mapa_rec[k] = rr
+        if cat_api.get("sucesso") and isinstance(cat_api.get("categorias"), dict):
+            try:
+                mapa_desp = dict((cat_api.get("categorias") or {}).get("despesas") or {})
+                mapa_rec = dict((cat_api.get("categorias") or {}).get("receitas") or {})
+            except:
+                mapa_desp = {}
+                mapa_rec = {}
+            try:
+                tot = cat_api.get("total") or {}
+                tot_despesas = float(tot.get("despesas", 0) or 0)
+                tot_receitas = float(tot.get("receitas", 0) or 0)
+            except:
+                tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
+                tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
+        else:
+            tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
+            tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
+            for k, lst in grupos.items():
+                dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+                rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+                if dd > 0:
+                    mapa_desp[k] = dd
+                if rr > 0:
+                    mapa_rec[k] = rr
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+        largura = 32
+        caixa = ""
+        caixa += "+" + ("-" * largura) + "+\n"
+        caixa += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=largura)}|\n"
+        caixa += "+" + ("-" * largura) + "+\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            resposta += f"  {label}        {formatar_moeda(v, negrito=False)}\n"
-        resposta += "\nENTRADAS\n"
+            val = formatar_moeda(v, negrito=False)
+            caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
+        caixa += "+" + ("-" * largura) + "+\n"
+        caixa += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=largura)}|\n"
+        caixa += "+" + ("-" * largura) + "+\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            resposta += f"  {label}        +{formatar_moeda(v, negrito=False)}\n"
+            val = f"+{formatar_moeda(v, negrito=False)}"
+            caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
+        caixa += "+" + ("-" * largura) + "+\n"
+        resposta += wrap_code_block(caixa) + "\n"
         saldo_mes = tot_receitas - tot_despesas
         resposta += f"\nSaldo do mês: {formatar_moeda(saldo_mes, negrito=True)}\n"
         try:
@@ -2517,14 +2548,27 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
     hoje = _now_sp()
     mkey = _month_key_sp()
     data_str = hoje.strftime("%B/%Y").title()
+    processing_msg = None
+    try:
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text("🔄 Gerando detalhes do mês...", parse_mode='Markdown')
+        else:
+            processing_msg = await query.message.reply_text("🔄 Gerando detalhes do mês...", parse_mode='Markdown')
+    except:
+        processing_msg = None
     try:
         qs = build_cliente_query_params(query)
         cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
+        cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
         try:
-            geral_api = await _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4)
+            geral_api, cat_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
+                _req_json_cached_async(cat_group_url, f"catgrp:{cid}:{mkey}", ttl=10, timeout=5),
+            )
         except:
             geral_api = {}
+            cat_api = {}
         transacoes = []
         try:
             db = get_db()
@@ -2612,7 +2656,34 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
                     resposta += f"  • {desc} — +{val}\n"
             resposta += "\n"
         if not grupos:
-            resposta += "📭 Nenhum lançamento no período.\n\n"
+            if cat_api.get("sucesso") and isinstance(cat_api.get("categorias"), dict):
+                try:
+                    mapa_desp = dict((cat_api.get("categorias") or {}).get("despesas") or {})
+                    mapa_rec = dict((cat_api.get("categorias") or {}).get("receitas") or {})
+                except:
+                    mapa_desp = {}
+                    mapa_rec = {}
+                largura = 32
+                caixa = ""
+                caixa += "+" + ("-" * largura) + "+\n"
+                caixa += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=largura)}|\n"
+                caixa += "+" + ("-" * largura) + "+\n"
+                for k, v in sorted(mapa_desp.items(), key=lambda x: -float(x[1])):
+                    label = CATEGORY_NAMES.get(k, k)
+                    val = formatar_moeda(float(v or 0), negrito=False)
+                    caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
+                caixa += "+" + ("-" * largura) + "+\n"
+                caixa += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=largura)}|\n"
+                caixa += "+" + ("-" * largura) + "+\n"
+                for k, v in sorted(mapa_rec.items(), key=lambda x: -float(x[1])):
+                    label = CATEGORY_NAMES.get(k, k)
+                    val = f"+{formatar_moeda(float(v or 0), negrito=False)}"
+                    caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
+                caixa += "+" + ("-" * largura) + "+\n"
+                resposta += "📭 Nenhum lançamento detalhado no período.\n"
+                resposta += wrap_code_block(caixa) + "\n"
+            else:
+                resposta += "📭 Nenhum lançamento no período.\n\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
@@ -2623,7 +2694,12 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
             [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes_categorias")],
             [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
         ])
-        await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+        elif processing_msg:
+            await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=resposta, parse_mode='Markdown', reply_markup=kb)
+        else:
+            await query.message.reply_text(resposta, parse_mode='Markdown', reply_markup=kb)
     except:
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes_categorias")],
