@@ -1127,6 +1127,8 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await analise_mensal(query, context)
     elif query.data == "analise_mes_categorias":
         await categorias_mes(query, context)
+    elif query.data == "catdia_expand":
+        await expandir_categorias_dia(query, context, limit=6)
     elif query.data.startswith("catdia:"):
         try:
             _, cslug = query.data.split(":", 1)
@@ -1155,6 +1157,8 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         except:
             cslug = "outros"
         await detalhar_categoria_mes(query, context, cslug)
+    elif query.data == "catmes_expand":
+        await expandir_categorias_mes(query, context, limit=6)
     elif query.data.startswith("catmes_more_saida:"):
         try:
             _, cslug, off_s, off_e = query.data.split(":", 3)
@@ -2037,12 +2041,8 @@ async def categorias_dia(query, context):
             resposta += f"📌 *{label}*\n"
             if desp_cat > 0:
                 resposta += f"   🔴 Despesas: {formatar_moeda(desp_cat, negrito=True)} — {_pct(desp_cat, tot_despesas)} do período\n"
-                for it in sorted([x for x in lst if x['tipo']=='saida'], key=lambda x: -float(x['valor']))[:3]:
-                    resposta += f"      🔴 {formatar_moeda(it['valor'])} — {md_escape(it['descricao'])}\n"
             if rec_cat > 0:
                 resposta += f"   🟢 Receitas: {formatar_moeda(rec_cat, negrito=True)} — {_pct(rec_cat, tot_receitas)} do período\n"
-                for it in sorted([x for x in lst if x['tipo']=='entrada'], key=lambda x: -float(x['valor']))[:3]:
-                    resposta += f"      🟢 {formatar_moeda(it['valor'])} — {md_escape(it['descricao'])}\n"
             resposta += "\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
@@ -2050,19 +2050,11 @@ async def categorias_dia(query, context):
         except:
             saldo_geral = obter_saldo_geral(get_cliente_id(query))
         resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
-        cat_buttons = []
-        row = []
-        for k, _ in ordenadas:
-            label = CATEGORY_NAMES.get(k, k)
-            row.append(InlineKeyboardButton(label, callback_data=f"catdia:{k}"))
-            if len(row) >= 3:
-                cat_buttons.append(row)
-                row = []
-        if row:
-            cat_buttons.append(row)
-        cat_buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="total_dia")])
-        cat_buttons.append([InlineKeyboardButton("🏠 MENU", callback_data="menu")])
-        kb = InlineKeyboardMarkup(cat_buttons)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬇️ Expandir detalhes", callback_data="catdia_expand")],
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="total_dia")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
         if hasattr(query, 'edit_message_text'):
             await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
         elif processing_msg:
@@ -2192,28 +2184,11 @@ async def categorias_mes(query, context):
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
         except:
             saldo_geral = obter_saldo_geral(get_cliente_id(query))
-        cat_buttons = []
-        row = []
-        for k, _v in desp_sorted[:9]:
-            label = CATEGORY_NAMES.get(k, k)
-            row.append(InlineKeyboardButton(label, callback_data=f"catmes:{k}"))
-            if len(row) >= 3:
-                cat_buttons.append(row)
-                row = []
-        if row:
-            cat_buttons.append(row)
-        row = []
-        for k, _v in rec_sorted[:6]:
-            label = CATEGORY_NAMES.get(k, k)
-            row.append(InlineKeyboardButton(f"Entradas: {label}", callback_data=f"catmes:{k}"))
-            if len(row) >= 3:
-                cat_buttons.append(row)
-                row = []
-        if row:
-            cat_buttons.append(row)
-        cat_buttons.append([InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes")])
-        cat_buttons.append([InlineKeyboardButton("🏠 MENU", callback_data="menu")])
-        kb = InlineKeyboardMarkup(cat_buttons)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬇️ Expandir detalhes", callback_data="catmes_expand")],
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
         if hasattr(query, 'edit_message_text'):
             await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
         elif processing_msg:
@@ -2335,6 +2310,75 @@ async def detalhar_categoria_dia(query, context, categoria_key: str, off_saida: 
             [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
         ])
         await query.edit_message_text("⚠️ Erro ao carregar detalhes da categoria.", parse_mode='Markdown', reply_markup=kb)
+
+async def expandir_categorias_dia(query, context, limit: int = 6):
+    hoje = _now_sp()
+    dkey = _day_key_sp()
+    data_str = hoje.strftime("%d/%m/%Y")
+    try:
+        qs = build_cliente_query_params(query)
+        cid = get_cliente_id(query)
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
+        extrato_url = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
+        try:
+            geral_api, extrato_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
+                _req_json_cached_async(extrato_url, f"extrato:{cid}:{dkey}", ttl=8, timeout=5),
+            )
+        except:
+            geral_api = {}
+            extrato_api = {}
+        transacoes = extrato_api.get("transacoes", []) if extrato_api.get("sucesso") else []
+        grupos = {}
+        for t in transacoes or []:
+            if t.get('estornado'):
+                continue
+            tp_raw = str(t.get('tipo', '')).strip().lower()
+            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
+                continue
+            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+            grupos.setdefault(cat, []).append({
+                "tipo": ('saida' if tp_raw in ('0', 'despesa', 'saida') else 'entrada'),
+                "valor": float(t.get('valor', 0) or 0),
+                "descricao": str(t.get('descricao', '') or '')
+            })
+        resposta = criar_cabecalho("CATEGORIAS (DIA) • DETALHES", 40)
+        resposta += f"\n📅 {data_str}\n\n"
+        for k, lst in sorted(grupos.items(), key=lambda x: x[0]):
+            label = CATEGORY_NAMES.get(k, k)
+            saida = sorted([x for x in lst if x['tipo'] == 'saida'], key=lambda x: -float(x['valor']))
+            entrada = sorted([x for x in lst if x['tipo'] == 'entrada'], key=lambda x: -float(x['valor']))
+            resposta += f"{label}\n"
+            if saida:
+                resposta += "  🔴 Despesas\n"
+                for it in saida[:limit]:
+                    desc = md_escape(it['descricao'])
+                    val = formatar_moeda(it['valor'])
+                    resposta += f"  • {desc.ljust(20)} {val}\n"
+            if entrada:
+                resposta += "  🟢 Receitas\n"
+                for it in entrada[:limit]:
+                    desc = md_escape(it['descricao'])
+                    val = formatar_moeda(it['valor'])
+                    resposta += f"  • {desc.ljust(20)} +{val}\n"
+            resposta += "\n"
+        try:
+            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
+            saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
+        except:
+            saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="total_dia_categorias")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+    except:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="total_dia_categorias")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        await query.edit_message_text("⚠️ Erro ao carregar detalhes.", parse_mode='Markdown', reply_markup=kb)
 
 async def detalhar_categoria_mes(query, context, categoria_key: str, off_saida: int = 0, off_entrada: int = 0):
     hoje = _now_sp()
@@ -2469,6 +2513,95 @@ async def detalhar_categoria_mes(query, context, categoria_key: str, off_saida: 
         ])
         await query.edit_message_text("⚠️ Erro ao carregar detalhes da categoria.", parse_mode='Markdown', reply_markup=kb)
 
+async def expandir_categorias_mes(query, context, limit: int = 6):
+    hoje = _now_sp()
+    mkey = _month_key_sp()
+    data_str = hoje.strftime("%B/%Y").title()
+    try:
+        qs = build_cliente_query_params(query)
+        cid = get_cliente_id(query)
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
+        try:
+            geral_api = await _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4)
+        except:
+            geral_api = {}
+        transacoes = []
+        try:
+            db = get_db()
+            root = db.collection('clientes').document(str(cid))
+            ano, m = mkey.split("-")
+            dt_ini = f"{ano}-{m}-01"
+            if m == "12":
+                dt_fim = f"{int(ano)+1}-01-01"
+            else:
+                dt_fim = f"{ano}-{int(m)+1:02d}-01"
+            q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
+            docs = []
+            try:
+                docs = q.stream()
+            except:
+                docs = []
+            idx = {}
+            tl = []
+            for d in docs:
+                o = d.to_dict() or {}
+                k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+                if not idx.get(k):
+                    idx[k] = 1
+                    tl.append(o)
+            transacoes = tl
+        except:
+            transacoes = []
+        grupos = {}
+        for t in transacoes or []:
+            if t.get('estornado'):
+                continue
+            tp_raw = str(t.get('tipo', '')).strip().lower()
+            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
+                continue
+            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+            grupos.setdefault(cat, []).append({
+                "tipo": ('saida' if tp_raw in ('0', 'despesa', 'saida') else 'entrada'),
+                "valor": float(t.get('valor', 0) or 0),
+                "descricao": str(t.get('descricao', '') or '')
+            })
+        resposta = criar_cabecalho("CATEGORIAS (MÊS) • DETALHES", 40)
+        resposta += f"\n📅 {data_str}\n\n"
+        for k, lst in sorted(grupos.items(), key=lambda x: x[0]):
+            label = CATEGORY_NAMES.get(k, k)
+            saida = sorted([x for x in lst if x['tipo'] == 'saida'], key=lambda x: -float(x['valor']))
+            entrada = sorted([x for x in lst if x['tipo'] == 'entrada'], key=lambda x: -float(x['valor']))
+            resposta += f"{label}\n"
+            if saida:
+                resposta += "  🔴 Despesas\n"
+                for it in saida[:limit]:
+                    desc = md_escape(it['descricao'])
+                    val = formatar_moeda(it['valor'])
+                    resposta += f"  • {desc.ljust(20)} {val}\n"
+            if entrada:
+                resposta += "  🟢 Receitas\n"
+                for it in entrada[:limit]:
+                    desc = md_escape(it['descricao'])
+                    val = formatar_moeda(it['valor'])
+                    resposta += f"  • {desc.ljust(20)} +{val}\n"
+            resposta += "\n"
+        try:
+            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
+            saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
+        except:
+            saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes_categorias")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+    except:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes_categorias")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        await query.edit_message_text("⚠️ Erro ao carregar detalhes.", parse_mode='Markdown', reply_markup=kb)
 async def resumo_hoje(query, context):
     hoje = _now_sp()
     data_str = hoje.strftime("%d/%m/%Y")
