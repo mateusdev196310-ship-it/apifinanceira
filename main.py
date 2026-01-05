@@ -2,11 +2,13 @@ import argparse
 import threading
 import sys
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from app.config import TELEGRAM_BOT_TOKEN, API_HOST, API_PORT, GEMINI_API_KEY
 import api_financeira
 import telegram_bot
 import json
+import requests
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -159,7 +161,68 @@ def run_bot():
         print("  .env -> TELEGRAM_BOT_TOKEN=SEU_TOKEN")
         print("  PowerShell -> $env:TELEGRAM_BOT_TOKEN=\"SEU_TOKEN\"")
         sys.exit(1)
+    try:
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    except:
+        pass
     telegram_bot.main()
+_T_API = None
+_T_BOT = None
+_last_api_restart = 0.0
+def _start_api_thread():
+    global _T_API
+    t = threading.Thread(target=run_api, daemon=True)
+    t.start()
+    _T_API = t
+def _start_bot_thread():
+    global _T_BOT
+    t = threading.Thread(target=run_bot, daemon=True)
+    t.start()
+    _T_BOT = t
+def _health_monitor(interval_seconds: int = 30):
+    global _T_API, _last_api_restart
+    while True:
+        try:
+            host = API_HOST if API_HOST and API_HOST != "0.0.0.0" else "127.0.0.1"
+            url = f"http://{host}:{API_PORT}/health"
+            ok = False
+            try:
+                r = requests.get(url, timeout=4)
+                j = r.json() if r.status_code == 200 else {}
+                ok = bool(j.get("status") == "online")
+            except:
+                ok = False
+            if not ok:
+                alive = (_T_API.is_alive() if _T_API else False)
+                now = time.time()
+                if (not alive) or (now - _last_api_restart >= 20):
+                    _start_api_thread()
+                    _last_api_restart = now
+        except:
+            pass
+        try:
+            time.sleep(interval_seconds)
+        except:
+            break
+def _supervisor_loop(interval_seconds: int = 15):
+    global _T_API, _T_BOT
+    while True:
+        try:
+            if not (_T_API and _T_API.is_alive()):
+                _start_api_thread()
+            if not (_T_BOT and _T_BOT.is_alive()):
+                _start_bot_thread()
+        except:
+            pass
+        try:
+            time.sleep(interval_seconds)
+        except:
+            break
 
 def main():
     parser = argparse.ArgumentParser()
@@ -190,10 +253,11 @@ def main():
     elif args.service == "bot":
         run_bot()
     else:
-        t_api = threading.Thread(target=run_api, daemon=True)
-        t_api.start()
+        _start_api_thread()
         t_mon = threading.Thread(target=_consistency_monitor, kwargs={"interval_seconds": 300, "recent_hours": 8}, daemon=True)
         t_mon.start()
+        t_h = threading.Thread(target=_health_monitor, kwargs={"interval_seconds": 30}, daemon=True)
+        t_h.start()
         run_bot()
 
 if __name__ == "__main__":
