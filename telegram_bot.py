@@ -2035,15 +2035,33 @@ async def categorias_dia(query, context):
             except:
                 return "0.0%"
         for k, lst in ordenadas:
+            pass
+        mapa_desp = {}
+        mapa_rec = {}
+        for k, lst in grupos.items():
+            dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+            rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+            if dd > 0:
+                mapa_desp[k] = dd
+            if rr > 0:
+                mapa_rec[k] = rr
+        desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
+        rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+        labels = [CATEGORY_NAMES.get(k, k) for k, _ in (desp_sorted + rec_sorted)]
+        max_label = max((len(x) for x in labels), default=12)
+        FS = "\u2007"
+        def pad(label):
+            return label + (FS * max(0, max_label - len(label)))
+        resposta += "DESPESAS\n"
+        for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            desp_cat = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-            rec_cat = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-            resposta += f"📌 *{label}*\n"
-            if desp_cat > 0:
-                resposta += f"   🔴 Despesas: {formatar_moeda(desp_cat, negrito=True)} — {_pct(desp_cat, tot_despesas)} do período\n"
-            if rec_cat > 0:
-                resposta += f"   🟢 Receitas: {formatar_moeda(rec_cat, negrito=True)} — {_pct(rec_cat, tot_receitas)} do período\n"
-            resposta += "\n"
+            resposta += f"  {pad(label)}{formatar_moeda(v, negrito=False)}\n"
+        resposta += "\nRECEITAS\n"
+        for k, v in rec_sorted:
+            label = CATEGORY_NAMES.get(k, k)
+            resposta += f"  {pad(label)}+{formatar_moeda(v, negrito=False)}\n"
+        saldo_dia = tot_receitas - tot_despesas
+        resposta += f"\nSaldo do dia: {formatar_moeda(saldo_dia, negrito=True)}\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
