@@ -2354,13 +2354,13 @@ async def expandir_categorias_dia(query, context, limit: int = 6):
                 for it in saida[:limit]:
                     desc = md_escape(it['descricao'])
                     val = formatar_moeda(it['valor'])
-                    resposta += f"  • {desc.ljust(20)} {val}\n"
+                    resposta += f"  • {desc} — {val}\n"
             if entrada:
                 resposta += "  🟢 Receitas\n"
                 for it in entrada[:limit]:
                     desc = md_escape(it['descricao'])
                     val = formatar_moeda(it['valor'])
-                    resposta += f"  • {desc.ljust(20)} +{val}\n"
+                    resposta += f"  • {desc} — +{val}\n"
             resposta += "\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
@@ -2549,6 +2549,32 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
                 if not idx.get(k):
                     idx[k] = 1
                     tl.append(o)
+            if not tl:
+                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+                end = datetime.strptime(dt_fim, "%Y-%m-%d")
+                while cur < end:
+                    dkey = cur.strftime("%Y-%m-%d")
+                    try:
+                        items = root.collection('transacoes').document(dkey).collection('items').stream()
+                    except:
+                        items = []
+                    try:
+                        tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
+                    except:
+                        tops = []
+                    for d in items:
+                        o = d.to_dict() or {}
+                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+                        if not idx.get(k):
+                            idx[k] = 1
+                            tl.append(o)
+                    for d in tops:
+                        o = d.to_dict() or {}
+                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+                        if not idx.get(k):
+                            idx[k] = 1
+                            tl.append(o)
+                    cur = cur + timedelta(days=1)
             transacoes = tl
         except:
             transacoes = []
@@ -2577,14 +2603,16 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
                 for it in saida[:limit]:
                     desc = md_escape(it['descricao'])
                     val = formatar_moeda(it['valor'])
-                    resposta += f"  • {desc.ljust(20)} {val}\n"
+                    resposta += f"  • {desc} — {val}\n"
             if entrada:
                 resposta += "  🟢 Receitas\n"
                 for it in entrada[:limit]:
                     desc = md_escape(it['descricao'])
                     val = formatar_moeda(it['valor'])
-                    resposta += f"  • {desc.ljust(20)} +{val}\n"
+                    resposta += f"  • {desc} — +{val}\n"
             resposta += "\n"
+        if not grupos:
+            resposta += "📭 Nenhum lançamento no período.\n\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
