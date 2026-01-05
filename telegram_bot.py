@@ -2226,19 +2226,17 @@ async def categorias_mes(query, context):
                 pass
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        labels = [CATEGORY_NAMES.get(k, k) for k, _ in (desp_sorted + rec_sorted)]
-        max_label = max((len(x) for x in labels), default=12)
-        FS = "\u2007"
-        def pad(label):
-            return label + (FS * max(0, max_label - len(label)))
-        resposta += "DESPESAS\n"
+        largura = 36
+        resposta += "DESPESAS\n\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            resposta += f"  {pad(label)}{formatar_moeda(v, negrito=False)}\n"
-        resposta += "\nRECEITAS\n"
+            linha = criar_linha_tabela(f"  {label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
+            resposta += f"{linha}\n"
+        resposta += "\nRECEITAS\n\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            resposta += f"  {pad(label)}+{formatar_moeda(v, negrito=False)}\n"
+            linha = criar_linha_tabela(f"  {label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
+            resposta += f"{linha}\n"
         try:
             tot_obj = (cat_api.get("total") or {}) if cat_api.get("sucesso") else {}
         except:
@@ -2247,7 +2245,8 @@ async def categorias_mes(query, context):
             saldo_mes = float(tot_obj.get("saldo")) if tot_obj.get("saldo") is not None else (tot_receitas - tot_despesas + float(tot_ajustes or 0))
         except:
             saldo_mes = tot_receitas - tot_despesas + float(tot_ajustes or 0)
-        resposta += f"\nSaldo do mês: {formatar_moeda(saldo_mes, negrito=True)}\n"
+        linha_saldo = criar_linha_tabela("Saldo do mês:", formatar_moeda(saldo_mes, negrito=True), True, "", largura=largura)
+        resposta += f"\n{linha_saldo}\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
