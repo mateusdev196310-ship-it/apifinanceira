@@ -2176,8 +2176,7 @@ async def categorias_mes(query, context):
             d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
             r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
             return r - d
-        resposta = criar_cabecalho("RESUMO DO MÊS", 40)
-        resposta += f"\n📅 {data_str}\n\n"
+        resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n\n"
         tot_despesas = 0.0
         tot_receitas = 0.0
         mapa_desp = {}
@@ -2226,17 +2225,20 @@ async def categorias_mes(query, context):
                 pass
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        largura = 40
-        resposta += "DESPESAS\n\n"
+        largura = 28
+        tabela = ""
+        tabela += "DESPESAS\n"
+        tabela += ("-" * 3) + "\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            linha = criar_linha_tabela(f"  {label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
-            resposta += f"{linha}\n"
-        resposta += "\nRECEITAS\n\n"
+            linha = criar_linha_tabela(f"{label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
+            tabela += f"{linha}\n"
+        tabela += "\nRECEITAS\n"
+        tabela += ("-" * 3) + "\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            linha = criar_linha_tabela(f"  {label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
-            resposta += f"{linha}\n"
+            linha = criar_linha_tabela(f"{label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
+            tabela += f"{linha}\n"
         try:
             tot_obj = (cat_api.get("total") or {}) if cat_api.get("sucesso") else {}
         except:
@@ -2245,8 +2247,9 @@ async def categorias_mes(query, context):
             saldo_mes = float(tot_obj.get("saldo")) if tot_obj.get("saldo") is not None else (tot_receitas - tot_despesas + float(tot_ajustes or 0))
         except:
             saldo_mes = tot_receitas - tot_despesas + float(tot_ajustes or 0)
-        linha_saldo = criar_linha_tabela("Saldo do mês:", formatar_moeda(saldo_mes, negrito=True), True, "", largura=largura)
-        resposta += f"\n{linha_saldo}\n"
+        linha_saldo = criar_linha_tabela("SALDO DO MÊS:", formatar_moeda(saldo_mes, negrito=False), True, "", largura=largura)
+        tabela += f"\n{linha_saldo}"
+        resposta += wrap_code_block(tabela) + "\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
