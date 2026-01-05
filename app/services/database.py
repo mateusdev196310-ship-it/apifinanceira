@@ -290,11 +290,21 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
     mr = _month_key_sp()
     arr = dados if isinstance(dados, list) else [dados]
     out = []
+    fallback_out = None
     batch = db.batch()
     for item in arr or []:
         base = normalize_item_for_store(item or {})
-        tp_raw = str(base.get("tipo", "0")).strip()
-        tp_txt = "entrada" if tp_raw == "1" else "saida"
+        tp_raw = str(base.get("tipo", "0")).strip().lower()
+        if tp_raw in ("1", "receita", "entrada"):
+            tp_txt = "entrada"
+        elif tp_raw in ("0", "despesa", "saida"):
+            tp_txt = "saida"
+        elif tp_raw in ("ajuste",):
+            tp_txt = "ajuste"
+        elif tp_raw in ("estorno",):
+            tp_txt = "estorno"
+        else:
+            tp_txt = "saida"
         if tipo_operacao in ("ajuste", "estorno"):
             tp_txt = tipo_operacao
         val = float(base.get("valor", 0) or 0)
@@ -402,7 +412,136 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
         except:
             pass
         out.append(doc)
-    batch.commit()
+    try:
+        batch.commit()
+    except Exception:
+        fallback_out = []
+        for item in arr or []:
+            try:
+                base = normalize_item_for_store(item or {})
+                tp_raw = str(base.get("tipo", "0")).strip().lower()
+                if tp_raw in ("1", "receita", "entrada"):
+                    tp_txt = "entrada"
+                elif tp_raw in ("0", "despesa", "saida"):
+                    tp_txt = "saida"
+                elif tp_raw in ("ajuste",):
+                    tp_txt = "ajuste"
+                elif tp_raw in ("estorno",):
+                    tp_txt = "estorno"
+                else:
+                    tp_txt = "saida"
+                if tipo_operacao in ("ajuste", "estorno"):
+                    tp_txt = tipo_operacao
+                val = float(base.get("valor", 0) or 0)
+                ref_day = str(base.get("data_referencia") or dr)
+                day_ref = root.collection("transacoes").document(ref_day)
+                item_ref = day_ref.collection("items").document()
+                doc = {
+                    "valor": val,
+                    "tipo": tp_txt,
+                    "categoria": str(base.get("categoria", "outros")),
+                    "descricao": str(base.get("descricao", "")),
+                    "data_referencia": ref_day,
+                    "timestamp_criacao": firestore.SERVER_TIMESTAMP,
+                    "moeda": str(item.get("moeda", "BRL")),
+                    "origem": origem,
+                    "referencia_id": referencia_id,
+                    "motivo_ajuste": motivo_ajuste,
+                    "imutavel": True,
+                    "confidence_score": float(base.get("confidence_score", item.get("confidence_score", 0.0) or 0.0) or 0.0),
+                    "pendente_confirmacao": bool(base.get("pendente_confirmacao", item.get("pendente_confirmacao", False))),
+                }
+                doc["ref_id"] = build_ref_id(ref_day, item_ref.id)
+                dref = root.collection("dias").document(ref_day)
+                mref = root.collection("meses").document(ref_day[:7])
+                item_ref.set(doc)
+                inc_d = {"atualizado_em": firestore.SERVER_TIMESTAMP}
+                inc_m = {"atualizado_em": firestore.SERVER_TIMESTAMP}
+                cat = str(base.get("categoria", "outros"))
+                if tp_txt == "entrada":
+                    inc_d.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_entrada": firestore.Increment(val),
+                        "saldo_dia": firestore.Increment(val)
+                    })
+                    inc_m.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_entrada": firestore.Increment(val),
+                        "saldo_mes": firestore.Increment(val)
+                    })
+                    inc_m.update({f"categorias_entrada.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias_entrada.{cat}": firestore.Increment(val)})
+                elif tp_txt == "saida":
+                    inc_d.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_saida": firestore.Increment(val),
+                        "saldo_dia": firestore.Increment(-val)
+                    })
+                    inc_m.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_saida": firestore.Increment(val),
+                        "saldo_mes": firestore.Increment(-val)
+                    })
+                    inc_m.update({f"categorias_saida.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias_saida.{cat}": firestore.Increment(val)})
+                elif tp_txt == "ajuste":
+                    inc_d.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_ajuste": firestore.Increment(val),
+                        "saldo_dia": firestore.Increment(val)
+                    })
+                    inc_m.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_ajuste": firestore.Increment(val),
+                        "saldo_mes": firestore.Increment(val)
+                    })
+                    inc_m.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+                elif tp_txt == "estorno":
+                    inc_d.update({"total_estorno": firestore.Increment(abs(val))})
+                    inc_m.update({"total_estorno": firestore.Increment(abs(val))})
+                    inc_m.update({f"categorias_estorno.{cat}": firestore.Increment(abs(val))})
+                    inc_d.update({f"categorias_estorno.{cat}": firestore.Increment(abs(val))})
+                else:
+                    inc_d.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_ajuste": firestore.Increment(val),
+                        "saldo_dia": firestore.Increment(val)
+                    })
+                    inc_m.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "total_ajuste": firestore.Increment(val),
+                        "saldo_mes": firestore.Increment(val)
+                    })
+                    inc_m.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+                dref.set(inc_d, merge=True)
+                mref.set(inc_m, merge=True)
+                try:
+                    delta = 0.0
+                    if tp_txt == "entrada":
+                        delta = float(val or 0)
+                    elif tp_txt == "saida":
+                        delta = -float(val or 0)
+                    elif tp_txt == "ajuste":
+                        delta = float(val or 0)
+                    if abs(delta) > 0:
+                        root.set({"saldo_real": firestore.Increment(delta), "atualizado_em": firestore.SERVER_TIMESTAMP}, merge=True)
+                except:
+                    pass
+                fallback_out.append(doc)
+            except Exception:
+                pass
+    if fallback_out is not None:
+        return fallback_out
     return out
 def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
     db = get_db()
