@@ -2190,24 +2190,19 @@ async def categorias_mes(query, context):
                     mapa_rec[k] = rr
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        largura = 32
-        caixa = ""
-        caixa += "+" + ("-" * largura) + "+\n"
-        caixa += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=largura)}|\n"
-        caixa += "+" + ("-" * largura) + "+\n"
+        labels = [CATEGORY_NAMES.get(k, k) for k, _ in (desp_sorted + rec_sorted)]
+        max_label = max((len(x) for x in labels), default=12)
+        FS = "\u2007"
+        def pad(label):
+            return label + (FS * max(0, max_label - len(label)))
+        resposta += "DESPESAS\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            val = formatar_moeda(v, negrito=False)
-            caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
-        caixa += "+" + ("-" * largura) + "+\n"
-        caixa += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=largura)}|\n"
-        caixa += "+" + ("-" * largura) + "+\n"
+            resposta += f"  {pad(label)}{formatar_moeda(v, negrito=False)}\n"
+        resposta += "\nRECEITAS\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            val = f"+{formatar_moeda(v, negrito=False)}"
-            caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
-        caixa += "+" + ("-" * largura) + "+\n"
-        resposta += wrap_code_block(caixa) + "\n"
+            resposta += f"  {pad(label)}+{formatar_moeda(v, negrito=False)}\n"
         saldo_mes = tot_receitas - tot_despesas
         resposta += f"\nSaldo do mês: {formatar_moeda(saldo_mes, negrito=True)}\n"
         try:
@@ -2663,25 +2658,20 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
                 except:
                     mapa_desp = {}
                     mapa_rec = {}
-                largura = 32
-                caixa = ""
-                caixa += "+" + ("-" * largura) + "+\n"
-                caixa += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=largura)}|\n"
-                caixa += "+" + ("-" * largura) + "+\n"
+                labels = [CATEGORY_NAMES.get(k, k) for k in (list(mapa_desp.keys()) + list(mapa_rec.keys()))]
+                max_label = max((len(x) for x in labels), default=12)
+                FS = "\u2007"
+                def pad(label):
+                    return label + (FS * max(0, max_label - len(label)))
+                resposta += "📭 Nenhum lançamento detalhado no período.\n"
+                resposta += "DESPESAS\n"
                 for k, v in sorted(mapa_desp.items(), key=lambda x: -float(x[1])):
                     label = CATEGORY_NAMES.get(k, k)
-                    val = formatar_moeda(float(v or 0), negrito=False)
-                    caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
-                caixa += "+" + ("-" * largura) + "+\n"
-                caixa += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=largura)}|\n"
-                caixa += "+" + ("-" * largura) + "+\n"
+                    resposta += f"  {pad(label)}{formatar_moeda(float(v or 0), negrito=False)}\n"
+                resposta += "\nRECEITAS\n"
                 for k, v in sorted(mapa_rec.items(), key=lambda x: -float(x[1])):
                     label = CATEGORY_NAMES.get(k, k)
-                    val = f"+{formatar_moeda(float(v or 0), negrito=False)}"
-                    caixa += f"|{criar_linha_tabela(label, val, True, '', largura=largura)}|\n"
-                caixa += "+" + ("-" * largura) + "+\n"
-                resposta += "📭 Nenhum lançamento detalhado no período.\n"
-                resposta += wrap_code_block(caixa) + "\n"
+                    resposta += f"  {pad(label)}+{formatar_moeda(float(v or 0), negrito=False)}\n"
             else:
                 resposta += "📭 Nenhum lançamento no período.\n\n"
         try:
