@@ -315,6 +315,70 @@ def processar_audio():
         texto = audio_processor.transcribe_audio_file(b, format=fmt)
     except Exception as e:
         return jsonify({"sucesso": False, "erro": str(e)}), 500
+@app.route('/health/consistency/all', methods=['GET'])
+def health_consistency_all():
+    try:
+        db = get_db()
+        clientes = []
+        try:
+            clientes = list(db.collection('clientes').stream())
+        except:
+            clientes = []
+        c = app.test_client()
+        out = []
+        for cl in clientes:
+            cid = cl.id
+            o = cl.to_dict() or {}
+            nome = o.get('cliente_display') or o.get('cliente_label') or cid
+            try:
+                h = c.get(f"/health/consistency?cliente_id={cid}").get_json() or {}
+            except:
+                h = {}
+            try:
+                extr = c.get(f"/extrato/hoje?cliente_id={cid}").get_json() or {}
+            except:
+                extr = {}
+            try:
+                tm = c.get(f"/total/mes?cliente_id={cid}").get_json() or {}
+            except:
+                tm = {}
+            try:
+                ts = c.get(f"/total/semana?cliente_id={cid}").get_json() or {}
+            except:
+                ts = {}
+            try:
+                sg = c.get(f"/saldo/atual?cliente_id={cid}").get_json() or {}
+            except:
+                sg = {}
+            try:
+                cm = c.get(f"/categorias/mes?cliente_id={cid}").get_json() or {}
+            except:
+                cm = {}
+            cats = sorted([(k, float(v or 0)) for k, v in dict(cm.get('categorias', {}) or {}).items()], key=lambda x: x[1], reverse=True)
+            cats_est = sorted([(k, float(v or 0)) for k, v in dict(cm.get('categorias_estorno', {}) or {}).items()], key=lambda x: x[1], reverse=True)
+            out.append({
+                "cliente_id": str(cid),
+                "nome": str(nome),
+                "dia": {"total": (extr.get("total") or {})},
+                "semana": {"total": (ts.get("total") or {})},
+                "mes": {"total": (tm.get("total") or {})},
+                "geral": {"total": (sg.get("total") or {})},
+                "consistencia": {
+                    "dia_consistente": ((h.get("dia") or {}).get("consistente")),
+                    "stream_count_validas": ((h.get("dia") or {}).get("stream_count_validas")),
+                    "mes_consistente_totais": ((h.get("mes") or {}).get("consistente_totais")),
+                    "mes_consistente_qtd": ((h.get("mes") or {}).get("consistente_qtd")),
+                },
+                "categorias_mes": {
+                    "top_despesas": cats[:5],
+                    "top_estornos": cats_est[:5],
+                    "total_despesas": cm.get("total_despesas"),
+                    "total_estornos": cm.get("total_estornos"),
+                }
+            })
+        return jsonify({"sucesso": True, "clientes": out})
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
     if not texto:
         return jsonify({"sucesso": False, "erro": "Transcrição vazia"}), 200
     rb = parse_text_to_transactions(texto) or []

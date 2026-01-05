@@ -578,10 +578,32 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
     dr = str(o.get("data_referencia") or _day_key_sp())
     if tp not in ("entrada", "saida"):
         return None
+    cat = str(o.get("categoria", "outros") or "outros").strip().lower()
+    if not dr:
+        try:
+            dr = _day_key_sp()
+        except Exception:
+            dr = _day_key_sp()
+    if not did:
+        try:
+            dr2 = str(o.get("data_referencia") or "")
+        except Exception:
+            dr2 = ""
+        if dr2 and len(dr2) == 10:
+            try:
+                cdoc = root.collection("transacoes").document(dr2).collection("items").document(str(referencia_id)).get()
+                if cdoc.exists:
+                    co = cdoc.to_dict() or {}
+                    ccat = str(co.get("categoria", "outros") or "outros").strip().lower()
+                    if cat in ("", "outros") and ccat and ccat not in ("outros",):
+                        cat = ccat
+            except Exception:
+                pass
+    payload_cat = cat
     payload = {
         "valor": abs(val),
         "tipo": "estorno",
-        "categoria": str(o.get("categoria", "outros")),
+        "categoria": payload_cat,
         "descricao": "estorno",
         "data_referencia": dr,
         "timestamp_criacao": firestore.SERVER_TIMESTAMP,
@@ -607,7 +629,7 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
         pass
     dref = root.collection("dias").document(dr)
     mref = root.collection("meses").document(dr[:7])
-    cat = str(o.get("categoria", "outros"))
+    cat = payload_cat
     inc_d = {"atualizado_em": firestore.SERVER_TIMESTAMP}
     inc_m = {"atualizado_em": firestore.SERVER_TIMESTAMP}
     abs_val = abs(val)
@@ -709,6 +731,19 @@ def atualizar_categoria_transacao(cliente_id: str, referencia_id: str, nova_cate
         except:
             upd["descricao"] = str(nova_descricao)
     batch.update(tdoc_ref, upd)
+    try:
+        if dr and did:
+            tl_ref = root.collection("transacoes").document(did)
+            if tl_ref.get().exists:
+                batch.update(tl_ref, upd)
+        else:
+            dr2 = str(o.get("data_referencia") or "")
+            if dr2 and len(dr2) == 10:
+                it_ref = root.collection("transacoes").document(dr2).collection("items").document(str(referencia_id))
+                if it_ref.get().exists:
+                    batch.update(it_ref, upd)
+    except Exception:
+        pass
     dref = root.collection("dias").document(dr)
     mref = root.collection("meses").document(mk)
     inc_d = {"atualizado_em": firestore.SERVER_TIMESTAMP}

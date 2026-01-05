@@ -520,32 +520,38 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 6):
     try:
         db = get_db()
         root = db.collection("clientes").document(str(cliente_id))
-        mk = _month_key_sp()
-        mm = root.collection("meses").document(mk).get().to_dict() or {}
         campo = "categorias_entrada" if str(tipo).strip().lower() in ("entrada", "1", "receita") else "categorias_saida"
-        cats = dict(mm.get(campo, {}) or {})
-        items = sorted(((k, float(v or 0)) for k, v in cats.items()), key=lambda x: (-x[1], x[0]))
+        agg = {}
+        try:
+            for mdoc in root.collection("meses").stream():
+                mo = mdoc.to_dict() or {}
+                for k, v in dict(mo.get(campo, {}) or {}).items():
+                    agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+        except:
+            mm = root.collection("meses").document(_month_key_sp()).get().to_dict() or {}
+            for k, v in dict(mm.get(campo, {}) or {}).items():
+                agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+        items = sorted(((k, float(v or 0)) for k, v in agg.items()), key=lambda x: (-x[1], x[0]))
         lst = [k for k, _ in items if k in CATEGORY_LIST and k not in ("duvida", "outros")]
         return lst[:limit]
     except:
         return []
 def _categoria_keyboard(ref_id: str, tipo: str, chat_id: str):
-    cats = [c for c in CATEGORY_LIST if c not in ("duvida",)]
+    base_prior = ["alimentacao", "transporte", "saude"]
+    cats = [c for c in CATEGORY_LIST if c not in ("duvida", "outros")]
     usados = _top_categorias_cliente(chat_id, tipo, limit=6)
     usados = [c for c in usados if c in cats]
+    lst = []
+    seen = set()
+    for c in base_prior + usados:
+        if c in cats and c not in seen:
+            seen.add(c)
+            lst.append(c)
+    if len(lst) > 9:
+        lst = lst[:9]
     rows = []
-    if usados:
-        row_u = []
-        for c in usados:
-            label = CATEGORY_NAMES.get(c, c)
-            row_u.append(InlineKeyboardButton(label, callback_data=f"confirm_categoria:{ref_id}:{c}"))
-            if len(row_u) >= 3:
-                rows.append(row_u)
-                row_u = []
-        if row_u:
-            rows.append(row_u)
     row = []
-    for c in cats:
+    for c in lst:
         label = CATEGORY_NAMES.get(c, c)
         row.append(InlineKeyboardButton(label, callback_data=f"confirm_categoria:{ref_id}:{c}"))
         if len(row) >= 3:
@@ -661,7 +667,11 @@ async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
                                     resposta += f"{emoji3} *{tipo3}:* {formatar_moeda(float(it3.get('valor', 0)))}\n"
                                     resposta += f"   `{desc_json3}`\n"
                                     resposta += f"   Categoria: {cat_nome3}\n\n"
-                                await context.bot.edit_message_text(chat_id=ltb["chat_id"], message_id=ltb["message_id"], text=resposta, parse_mode='Markdown')
+                                kb = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"),
+                                     InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")]
+                                ])
+                                await context.bot.edit_message_text(chat_id=ltb["chat_id"], message_id=ltb["message_id"], text=resposta, parse_mode='Markdown', reply_markup=kb)
                         except:
                             pass
                     except:
@@ -1055,13 +1065,9 @@ async def start(update: Update, context: CallbackContext) -> None:
     
     keyboard = [
         [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia")],
-        [InlineKeyboardButton("🗓️ TOTAIS DA SEMANA", callback_data="total_semana")],
-        [InlineKeyboardButton("📊 RESUMO DIÁRIO", callback_data="relatorio_dia")],
-        [InlineKeyboardButton("📈 ANÁLISE MENSAL", callback_data="analise_mes")],
+        [InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")],
         [InlineKeyboardButton("🎯 METAS MENSAIS", callback_data="projetados_menu")],
         [InlineKeyboardButton("📅 COMPROMISSOS DO MÊS", callback_data="debitos_menu")],
-        [InlineKeyboardButton("🏷️ GASTOS POR CATEGORIA", callback_data="categorias")],
-        [InlineKeyboardButton("📋 EXTRATO COMPLETO", callback_data="extrato_completo")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1113,10 +1119,14 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
         await relatorio_diario(query, context)
     elif query.data == "total_dia":
         await relatorio_total(query, context)
+    elif query.data == "total_dia_categorias":
+        await categorias_dia(query, context)
     elif query.data == "total_semana":
         await total_semana(query, context)
     elif query.data == "analise_mes":
         await analise_mensal(query, context)
+    elif query.data == "analise_mes_categorias":
+        await categorias_mes(query, context)
     elif query.data == "categorias":
         await relatorio_categorias(query, context)
     elif query.data == "extrato_completo":
@@ -1266,7 +1276,11 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
             chat_id = ltb.get("chat_id")
             message_id = ltb.get("message_id")
             if chat_id and message_id:
-                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=resposta, parse_mode='Markdown')
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"),
+                     InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")]
+                ])
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=resposta, parse_mode='Markdown', reply_markup=kb)
         except:
             pass
         try:
@@ -1393,7 +1407,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
 
 # ===== RELATÓRIO DE TOTAIS DO DIA (/total) =====
 async def relatorio_total(query, context):
-    """Gera relatório de totais acumulados do DIA ATUAL."""
+    """Gera relatório simples do DIA ATUAL."""
     data_atual = _now_sp()
     data_str = data_atual.strftime("%d/%m/%Y")
     
@@ -1424,33 +1438,10 @@ async def relatorio_total(query, context):
             geral_api = {}
         tot_day = day_api.get("total", {"receitas": 0, "despesas": 0, "saldo": 0})
         if not (float(tot_day.get("receitas", 0) or 0) or float(tot_day.get("despesas", 0) or 0) or float(tot_day.get("ajustes", 0) or 0)):
-            resposta = criar_cabecalho("TOTAIS DO DIA", 40)
-            resposta += f"\n\n📅 *Data:* {data_str}\n"
-            resposta += "=" * 40 + "\n\n"
-            resposta += "📭 *NENHUMA TRANSAÇÃO HOJE*\n\n"
-            resposta += "💡 *Para começar, envie:*\n"
-            resposta += "• \"gastei 50 no mercado\"\n"
-            resposta += "• \"recebi 1000 de salário\"\n"
-            resposta += "• \"paguei 35,90 na farmácia\"\n\n"
-            resposta += "📊 *Os totais serão calculados automaticamente.*"
-            
-            keyboard = [[InlineKeyboardButton("🏠 MENU PRINCIPAL", callback_data="menu")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            if hasattr(query, 'edit_message_text'):
-                await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=reply_markup)
-            elif processing_msg:
-                await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=resposta, parse_mode='Markdown', reply_markup=reply_markup)
-            else:
-                await query.message.reply_text(resposta, parse_mode='Markdown', reply_markup=reply_markup)
-            return
+            tot_day = {"receitas": 0, "despesas": 0, "saldo": 0}
         
         resposta = criar_cabecalho("TOTAIS DO DIA", 40)
-        resposta += f"\n\n📅 *Data:* {data_str}\n"
-        resposta += "🕐 *Período:* DIA ATUAL (00:00 até agora)\n"
-        resposta += "=" * 40 + "\n\n"
-        
-        resposta += "💰 *TOTAIS DO DIA*\n"
+        resposta += f"\n\n📅 {data_str}\n\n"
         tot = tot_day
         caixa = ""
         caixa += "+" + ("-" * 28) + "+\n"
@@ -1459,58 +1450,15 @@ async def relatorio_total(query, context):
         caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(tot.get('saldo', 0), negrito=False), True, '', largura=28)}|\n"
         caixa += "+" + ("-" * 28) + "+"
         resposta += wrap_code_block(caixa) + "\n\n"
-        estornos_mes = mes_api.get("total", {}).get("estornos", 0) if mes_api.get("sucesso") else 0
-        if estornos_mes > 0:
-            resposta += f"🔁 Estornos do mês: {formatar_moeda(estornos_mes, negrito=True)}\n\n"
-        if tot.get('estornos', 0) > 0:
-            resposta += f"🔁 Estornos do dia: {formatar_moeda(tot.get('estornos', 0), negrito=True)}\n\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
         except:
             saldo_geral = obter_saldo_geral(get_cliente_id(query))
-        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
-        
-        resposta += criar_secao("ESTATÍSTICAS DO DIA")
-        
-        if float(tot.get('receitas', 0) or 0) > 0:
-            percentual_gastos = (float(tot.get('despesas', 0) or 0) / float(tot.get('receitas', 0) or 0)) * 100
-            
-            resposta += criar_secao("SAÚDE FINANCEIRA (HOJE)")
-            
-            if percentual_gastos > 100:
-                resposta += "\n🔴 *CRÍTICO* - Gastando mais do que recebe!\n"
-                resposta += f"   • Gasto: {percentual_gastos:.1f}% da receita\n"
-                resposta += f"   • Déficit: {formatar_moeda(abs(float(tot.get('saldo', 0) or 0)))}\n"
-            elif percentual_gastos > 80:
-                resposta += "\n🟡 *ATENÇÃO* - Próximo do limite\n"
-                resposta += f"   • Gasto: {percentual_gastos:.1f}% da receita\n"
-                resposta += f"   • Margem: {formatar_moeda(float(tot.get('saldo', 0) or 0))}\n"
-            elif percentual_gastos > 60:
-                resposta += "\n🟢 *CONTROLADO* - Dentro do esperado\n"
-                resposta += f"   • Gasto: {percentual_gastos:.1f}% da receita\n"
-                resposta += f"   • Economia: {formatar_moeda(float(tot.get('saldo', 0) or 0))}\n"
-            else:
-                resposta += "\n✅ *EXCELENTE* - Ótimo controle!\n"
-                resposta += f"   • Gasto: {percentual_gastos:.1f}% da receita\n"
-                resposta += f"   • Economia: {100 - percentual_gastos:.1f}% da receita\n"
-                resposta += f"   • Valor: {formatar_moeda(float(tot.get('saldo', 0) or 0))}\n"
-        
-        resposta += criar_secao("METAS PARA O DIA")
-        resposta += "\n🎯 *Recomendado:*\n"
-        resposta += "• Manter gastos abaixo de 80% da receita\n"
-        resposta += "• Economizar pelo menos 20% da receita\n"
-        resposta += "• Registrar TODAS as transações\n\n"
-        
-        resposta += "📝 *Legenda:*\n"
-        resposta += "• **TOTAIS DO DIA** = Somente transações de hoje\n"
-        resposta += "• Atualizado em tempo real\n"
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
         
         keyboard = [
-            [
-                InlineKeyboardButton("📊 RESUMO DETALHADO", callback_data="relatorio_dia"),
-                InlineKeyboardButton("📈 ANÁLISE MENSAL", callback_data="analise_mes")
-            ],
+            [InlineKeyboardButton("📊 POR CATEGORIA (HOJE)", callback_data="total_dia_categorias")],
             [InlineKeyboardButton("🏠 MENU PRINCIPAL", callback_data="menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1539,7 +1487,7 @@ async def relatorio_total(query, context):
 
 # ===== RESUMO FINANCEIRO (/resumo) =====
 async def resumo_financeiro(query, context):
-    """Gera resumo financeiro COMPLETO com DIA vs MÊS."""
+    """Gera resumo financeiro simples com DIA vs MÊS."""
     hoje = _now_sp()
     data_str = hoje.strftime("%d/%m/%Y")
     processing_msg = None
@@ -1650,11 +1598,8 @@ async def resumo_financeiro(query, context):
                 tot_mes = best
         except:
             pass
-        resposta = criar_cabecalho("RESUMO FINANCEIRO COMPLETO", 40)
-        resposta += f"\n📅 *Data:* {data_str}\n"
-        resposta += "🕐 *Gerado:* " + hoje.strftime("%H:%M") + "\n"
-        resposta += "=" * 40 + "\n\n"
-        resposta += "📊 *COMPARAÇÃO DIA vs MÊS*\n"
+        resposta = criar_cabecalho("RESUMO FINANCEIRO", 40)
+        resposta += f"\n📅 {data_str}\n\n"
         tabela = ""
         tabela += "+" + ("-" * 14) + "+" + ("-" * 14) + "+\n"
         tabela += f"|{'HOJE':^14}|{'ESTE MÊS':^14}|\n"
@@ -1690,82 +1635,13 @@ async def resumo_financeiro(query, context):
         tabela += f"|{str(trans_dia):>14}|{str(trans_mes):>14}|\n"
         tabela += "+" + ("-" * 14) + "+" + ("-" * 14) + "+\n"
         resposta += wrap_code_block(tabela) + "\n"
-        est_dia = tot_day.get('estornos', 0)
-        est_mes = tot_mes.get('estornos', 0)
         try:
-            if trans_mes == 0:
-                rd = float(tot_day.get('receitas', 0) or 0)
-                dd = float(tot_day.get('despesas', 0) or 0)
-                sd = float(tot_day.get('saldo', 0) or 0)
-                rm = float(tot_mes.get('receitas', 0) or 0)
-                dm = float(tot_mes.get('despesas', 0) or 0)
-                sm = float(tot_mes.get('saldo', 0) or 0)
-                if (abs(rd - rm) < 1e-9) and (abs(dd - dm) < 1e-9) and (abs(sd - sm) < 1e-9):
-                    trans_mes = trans_dia
+            saldo_geral = float((sum_api.get("total", {}) or {}).get("saldo_real", (sum_api.get("total", {}) or {}).get("saldo", 0)) or 0) if sum_api.get("sucesso") else obter_saldo_geral(get_cliente_id(query))
         except:
-            pass
-        if est_dia > 0:
-            resposta += f"\n🔁 Estornos hoje: {formatar_moeda(est_dia, negrito=True)}"
-        if est_mes > 0:
-            resposta += f"\n🔁 Estornos este mês: {formatar_moeda(est_mes, negrito=True)}\n"
-        resposta += criar_secao("ANÁLISE DO DIA")
-        if float(tot_day.get('receitas', 0) or 0) > 0:
-            percentual_dia = (float(tot_day.get('despesas', 0) or 0) / float(tot_day.get('receitas', 0) or 0)) * 100
-            resposta += f"\n📊 *Utilização da receita:* {percentual_dia:.1f}%\n"
-        if not (float(tot_day.get('receitas', 0) or 0) or float(tot_day.get('despesas', 0) or 0)):
-            resposta += "\n📭 *Nenhuma transação hoje*\n"
-        resposta += criar_secao("ANÁLISE DO MÊS")
-        dias_decorridos = hoje.day
-        dias_no_mes = calendar.monthrange(hoje.year, hoje.month)[1]
-        resposta += f"\n📅 *Progresso:* {dias_decorridos}/{dias_no_mes} dias ({dias_decorridos/dias_no_mes*100:.0f}%)\n"
-        if float(tot_mes.get('receitas', 0) or 0) > 0:
-            percentual_mes = (float(tot_mes.get('despesas', 0) or 0) / float(tot_mes.get('receitas', 0) or 0)) * 100
-            resposta += f"📊 *Utilização mensal:* {percentual_mes:.1f}%\n"
-            if dias_decorridos > 0:
-                media_diaria = float(tot_mes.get('total_despesas', tot_mes.get('despesas', 0)) or 0) / dias_decorridos
-                resposta += f"📊 *Média diária:* {formatar_moeda(media_diaria)}\n"
-                projecao = media_diaria * dias_no_mes
-                resposta += f"🎯 *Projeção mensal:* {formatar_moeda(projecao)}\n"
-        else:
-            if (trans_mes == 0) and (float(tot_mes.get('despesas', 0) or 0) == 0) and (float(tot_mes.get('receitas', 0) or 0) == 0):
-                resposta += "\n📭 *Nenhuma transação este mês*\n"
-        resposta += criar_secao("RECOMENDAÇÕES")
-        resposta += "\n💡 *Baseado nos seus dados:*\n"
-        saldo_mes_val = float(tot_mes.get('saldo', 0) or 0)
-        receitas_mes_val = float(tot_mes.get('receitas', 0) or 0)
-        if (float(tot_day.get('receitas', 0) or 0) == 0 and float(tot_day.get('despesas', 0) or 0) == 0) and (receitas_mes_val == 0 and float(tot_mes.get('despesas', 0) or 0) == 0):
-            resposta += "1. 📝 *Comece agora* registrando sua primeira transação\n"
-            resposta += "2. 💰 Use \"/total\" para acompanhar diariamente\n"
-            resposta += "3. 🎯 Estabeleça metas realistas\n"
-        elif saldo_mes_val < 0:
-            resposta += "1. 🔴 *Corte gastos* não essenciais imediatamente\n"
-            resposta += "2. 📊 *Analise* suas maiores despesas\n"
-            resposta += "3. 🎯 *Estabeleça* um orçamento rigoroso\n"
-        elif receitas_mes_val > 0 and saldo_mes_val > (receitas_mes_val * 0.3):
-            resposta += "1. ✅ *Excelente!* Continue economizando\n"
-            resposta += "2. 📈 *Considere* investir o excedente\n"
-            resposta += "3. 🎯 *Aumente* suas metas de poupança\n"
-        else:
-            resposta += "1. 📊 *Mantenha* o acompanhamento diário\n"
-            resposta += "2. 💰 *Registre* TODAS as transações\n"
-            resposta += "3. 🎯 *Revise* suas categorias de gastos\n"
-        resposta += criar_secao("LEGENDA")
-        resposta += "\n📝 *ENTENDA OS PERÍODOS:*\n"
-        resposta += "• **HOJE** = Transações do dia atual (00:00 até agora)\n"
-        resposta += "• **ESTE MÊS** = Todas transações desde o dia 1\n"
-        resposta += "• **SALDO** = Receitas - Despesas do período\n"
-        resposta += "• **PROJEÇÃO** = Estimativa baseada na média diária\n\n"
-        resposta += "• **ORDEM DA TABELA** = 📥 Receitas → 📤 Despesas → 📈 Saldo → 📋 Transações\n\n"
-        resposta += "💡 *Dica:* Use \"/total\" para ver apenas o dia atual."
+            saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
         keyboard = [
-            [
-                InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"),
-                InlineKeyboardButton("📈 ANÁLISE MENSAL", callback_data="analise_mes")
-            ],
-            [
-                InlineKeyboardButton("🏷️ CATEGORIAS", callback_data="categorias"),
-                InlineKeyboardButton("📋 EXTRATO", callback_data="extrato_completo")
-            ],
+            [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia")],
             [InlineKeyboardButton("🏠 MENU PRINCIPAL", callback_data="menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1793,7 +1669,7 @@ async def resumo_financeiro(query, context):
 
 # ===== RELATÓRIO DIÁRIO DETALHADO =====
 async def relatorio_diario(query, context):
-    """Gera relatório detalhado do dia."""
+    """Gera relatório simples do dia."""
     hoje = _now_sp()
     data_str = hoje.strftime("%d/%m/%Y")
     processing_msg = None
@@ -1826,67 +1702,18 @@ async def relatorio_diario(query, context):
                 await query.message.reply_text(resposta, parse_mode='Markdown', reply_markup=reply_markup)
             return
         stats_dia = calcular_estatisticas(transacoes_dia, "HOJE")
-        resposta = criar_cabecalho("RELATÓRIO DIÁRIO DETALHADO", 40)
-        resposta += f"\n📅 *Data:* {data_str}\n"
-        resposta += "🕐 *Período:* DIA ATUAL\n"
-        resposta += "=" * 40 + "\n\n"
-        resposta += "💰 *TOTAIS DO DIA*\n"
+        resposta = criar_cabecalho("RELATÓRIO DO DIA", 40)
+        resposta += f"\n📅 {data_str}\n\n"
         caixa = ""
         caixa += "+" + ("-" * 28) + "+\n"
         caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(stats_dia['total_receitas'], negrito=False), True, '', largura=28)}|\n"
         caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(stats_dia['total_despesas'], negrito=False), True, '', largura=28)}|\n"
         caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(stats_dia['saldo'], negrito=False), True, '', largura=28)}|\n"
         caixa += "+" + ("-" * 28) + "+"
-        resposta += wrap_code_block(caixa) + "\n\n"
+        resposta += wrap_code_block(caixa) + "\n"
         saldo_geral = obter_saldo_geral(get_cliente_id(query))
-        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
-        try:
-            estornos_dia = sum(float(t.get('valor', 0) or 0) for t in transacoes_dia if str(t.get('tipo', '')).strip().lower() == 'estorno')
-            if estornos_dia > 0:
-                resposta += f"🔁 Estornos do dia: {formatar_moeda(estornos_dia, negrito=True)}\n\n"
-        except:
-            pass
-        resposta += criar_secao("DETALHAMENTO DAS TRANSAÇÕES")
-        categorias = defaultdict(list)
-        for t in transacoes_dia:
-            if t.get('estornado'):
-                continue
-            cat = t.get('categoria', 'outros')
-            categorias[cat].append(t)
-        for cat, trans_cat in categorias.items():
-            cat_nome = CATEGORY_NAMES.get(cat, cat.upper())
-            total_cat = sum(t['valor'] for t in trans_cat)
-            resposta += f"\n{cat_nome} - {formatar_moeda(total_cat)}\n"
-            for t in trans_cat:
-                tp = str(t.get('tipo', '')).strip().lower()
-                emoji = "🔴" if tp in ('0', 'saida') else "🟢"
-                hora = ""
-                if 'timestamp' in t:
-                    try:
-                        dt = datetime.fromisoformat(t['timestamp'].replace('Z', '+00:00'))
-                        try:
-                            tz = _TZ_SP
-                        except:
-                            tz = None
-                        hora = (dt.astimezone(tz) if tz is not None else dt.astimezone()).strftime("%H:%M")
-                    except:
-                        hora = ""
-                resposta += f"  {emoji} {formatar_moeda(t['valor'])}"
-                if hora:
-                    resposta += f" ({hora})"
-                resposta += f" - {t['descricao']}\n"
-        resposta += "\n" + "=" * 40 + "\n"
-        resposta += "📊 *RESUMO FINAL DO DIA*\n"
-        resposta += f"• Total de transações: {stats_dia['quantidade']['total']}\n"
-        resposta += f"• Receitas: {stats_dia['quantidade']['receitas']}\n"
-        resposta += f"• Despesas: {stats_dia['quantidade']['despesas']}\n"
-        if stats_dia['total_receitas'] > 0:
-            percentual = (stats_dia['total_despesas'] / stats_dia['total_receitas']) * 100
-            resposta += f"• % da receita gasta: {percentual:.1f}%\n"
-        resposta += "\n💡 *Este relatório mostra APENAS as transações de HOJE.*"
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
         keyboard = [
-            [InlineKeyboardButton("💰 VER TOTAIS SIMPLES", callback_data="total_dia")],
-            [InlineKeyboardButton("📈 ANÁLISE MENSAL", callback_data="analise_mes")],
             [InlineKeyboardButton("🏠 MENU", callback_data="menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2059,83 +1886,24 @@ async def analise_mensal(query, context):
         except:
             pass
         
-        resposta = criar_cabecalho("ANÁLISE MENSAL DETALHADA", 40)
-        resposta += f"\n📅 *Período:* {data_str}\n"
-        resposta += f"📊 *Progresso:* {dias_decorridos}/{dias_no_mes} dias ({dias_decorridos/dias_no_mes*100:.0f}%)\n"
-        resposta += "=" * 40 + "\n\n"
-        
-        resposta += "💰 *TOTAIS DO MÊS (ATÉ HOJE)*\n"
+        resposta = criar_cabecalho("ANÁLISE MENSAL", 40)
+        resposta += f"\n📅 {data_str}\n\n"
         caixa = ""
         caixa += "+" + ("-" * 28) + "+\n"
         caixa += f"|{criar_linha_tabela('RECEITAS:', formatar_moeda(stats_mes['total_receitas'], negrito=False), True, '', largura=28)}|\n"
         caixa += f"|{criar_linha_tabela('DESPESAS:', formatar_moeda(stats_mes['total_despesas'], negrito=False), True, '', largura=28)}|\n"
         caixa += f"|{criar_linha_tabela('SALDO:', formatar_moeda(stats_mes['saldo'], negrito=False), True, '', largura=28)}|\n"
         caixa += "+" + ("-" * 28) + "+"
-        resposta += wrap_code_block(caixa) + "\n\n"
-        if estornos_mes > 0:
-            resposta += f"↩️ *Estornos (mês):* {formatar_moeda(estornos_mes, negrito=True)}\n"
+        resposta += wrap_code_block(caixa) + "\n"
         try:
             saldo_geral = float((sum_api.get("total", {}) or {}).get("saldo_real", (sum_api.get("total", {}) or {}).get("saldo", 0)) or 0) if sum_api.get("sucesso") else obter_saldo_geral(get_cliente_id(query))
         except:
             saldo_geral = obter_saldo_geral(get_cliente_id(query))
-        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
-        
-        if dias_decorridos > 0:
-            resposta += criar_secao("MÉDIAS DIÁRIAS")
-            media_receita = stats_mes['total_receitas'] / dias_decorridos
-            media_despesa = stats_mes['total_despesas'] / dias_decorridos
-            
-            resposta += f"\n📊 *Receita/dia:* {formatar_moeda(media_receita)}\n"
-            resposta += f"📊 *Despesa/dia:* {formatar_moeda(media_despesa)}\n"
-            resposta += f"📊 *Saldo/dia:* {formatar_moeda(media_receita - media_despesa)}\n"
-        
-        resposta += criar_secao("PROJEÇÕES PARA FIM DO MÊS")
-        if dias_decorridos > 0:
-            proj_receitas = (stats_mes['total_receitas'] / dias_decorridos) * dias_no_mes
-            proj_despesas = (stats_mes['total_despesas'] / dias_decorridos) * dias_no_mes
-            proj_saldo = proj_receitas - proj_despesas
-            
-            resposta += f"\n🎯 *Receitas projetadas:* {formatar_moeda(proj_receitas)}\n"
-            resposta += f"🎯 *Despesas projetadas:* {formatar_moeda(proj_despesas)}\n"
-            resposta += f"🎯 *Saldo projetado:* {formatar_moeda(proj_saldo)}\n"
-            
-            if stats_mes['total_receitas'] > 0:
-                percentual_atual = (stats_mes['total_despesas'] / stats_mes['total_receitas']) * 100
-                resposta += f"\n📊 *Atual:* Gastando {percentual_atual:.1f}% da receita\n"
-                
-                if percentual_atual > 80:
-                    resposta += "🔴 *Acima da meta* (meta: 80%)\n"
-                elif percentual_atual > 60:
-                    resposta += "🟡 *Próximo da meta* (meta: 80%)\n"
-                else:
-                    resposta += "✅ *Dentro da meta* (meta: 80%)\n"
-        
-        if stats_mes['categorias_despesas']:
-            total_despesas = stats_mes['total_despesas']
-            categorias_filtradas = {k: v for k, v in stats_mes['categorias_despesas'].items() if float(v or 0) > 0}
-            if total_despesas > 0 and categorias_filtradas:
-                resposta += criar_secao("DISTRIBUIÇÃO DOS GASTOS")
-                top_categorias = sorted(categorias_filtradas.items(), key=lambda x: x[1], reverse=True)[:5]
-                for cat, valor in top_categorias:
-                    percentual = (valor / total_despesas * 100)
-                    cat_nome = CATEGORY_NAMES.get(cat, cat)
-                    barra = "█" * int(percentual / 3)
-                    resposta += f"\n{cat_nome}\n"
-                    resposta += f"{formatar_moeda(valor)} ({percentual:.1f}%) {barra}\n"
-        resposta += ""
-        
-        resposta += "\n" + "=" * 40 + "\n"
-        resposta += "📝 *LEGENDA:*\n"
-        resposta += "• *TOTAIS DO MÊS* = Acumulado desde o dia 1\n"
-        resposta += "• *PROJEÇÕES* = Baseadas na média diária\n"
-        resposta += "• *META* = Gastar no máximo 80% da receita\n\n"
-        
-        resposta += "💡 *Use \"/total\" para ver apenas o dia atual.*"
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
         
         keyboard = [
-            [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia")],
-            [InlineKeyboardButton("📊 RESUMO COMPLETO", callback_data="resumo")],
-            [InlineKeyboardButton("🏠 MENU", callback_data="menu")]
+            [InlineKeyboardButton("📊 POR CATEGORIA (MÊS)", callback_data="analise_mes_categorias")],
+            [InlineKeyboardButton("🏠 MENU PRINCIPAL", callback_data="menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -2151,6 +1919,164 @@ async def analise_mensal(query, context):
             [InlineKeyboardButton("🏠 MENU", callback_data="menu")]
         ])
         err_txt = "⚠️ Erro ao gerar análise. Tente novamente."
+        try:
+            if hasattr(query, 'edit_message_text'):
+                await query.edit_message_text(err_txt, parse_mode='Markdown', reply_markup=kb)
+            elif processing_msg:
+                await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=err_txt, parse_mode='Markdown', reply_markup=kb)
+            else:
+                await query.message.reply_text(err_txt, parse_mode='Markdown', reply_markup=kb)
+        except:
+            pass
+async def categorias_dia(query, context):
+    hoje = _now_sp()
+    dkey = _day_key_sp()
+    data_str = hoje.strftime("%d/%m/%Y")
+    processing_msg = None
+    try:
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text("🔄 Gerando categorias do dia...", parse_mode='Markdown')
+        else:
+            processing_msg = await query.message.reply_text("🔄 Gerando categorias do dia...", parse_mode='Markdown')
+    except:
+        processing_msg = None
+    try:
+        qs = build_cliente_query_params(query)
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
+        url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&group_by=categoria&{qs}"
+        try:
+            geral_api, cat_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{get_cliente_id(query)}", ttl=20, timeout=4),
+                _req_json_cached_async(url, f"daycats:{get_cliente_id(query)}:{dkey}", ttl=10, timeout=4),
+            )
+        except:
+            geral_api = {}
+            cat_api = {}
+        cats = cat_api.get("categorias", {}) if cat_api.get("sucesso") else {}
+        ce = dict(cats.get("despesas", {}) or {})
+        ci = dict(cats.get("receitas", {}) or {})
+        ce_items = sorted(((k, float(v or 0)) for k, v in ce.items()), key=lambda x: (-x[1], x[0]))[:9]
+        ci_items = sorted(((k, float(v or 0)) for k, v in ci.items()), key=lambda x: (-x[1], x[0]))[:9]
+        resposta = criar_cabecalho("CATEGORIAS DO DIA", 40)
+        resposta += f"\n📅 {data_str}\n\n"
+        caixa1 = ""
+        caixa1 += "+" + ("-" * 32) + "+\n"
+        caixa1 += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=32)}|\n"
+        caixa1 += "+" + ("-" * 32) + "+\n"
+        for k, v in ce_items:
+            label = CATEGORY_NAMES.get(k, k)
+            caixa1 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
+        caixa1 += "+" + ("-" * 32) + "+\n"
+        caixa2 = ""
+        caixa2 += "+" + ("-" * 32) + "+\n"
+        caixa2 += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=32)}|\n"
+        caixa2 += "+" + ("-" * 32) + "+\n"
+        for k, v in ci_items:
+            label = CATEGORY_NAMES.get(k, k)
+            caixa2 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
+        caixa2 += "+" + ("-" * 32) + "+\n"
+        resposta += wrap_code_block(caixa1) + "\n" + wrap_code_block(caixa2) + "\n"
+        try:
+            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
+            saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
+        except:
+            saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="total_dia")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+        elif processing_msg:
+            await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=resposta, parse_mode='Markdown', reply_markup=kb)
+        else:
+            await query.message.reply_text(resposta, parse_mode='Markdown', reply_markup=kb)
+    except:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Tentar novamente", callback_data="total_dia_categorias")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        err_txt = "⚠️ Erro ao carregar categorias do dia."
+        try:
+            if hasattr(query, 'edit_message_text'):
+                await query.edit_message_text(err_txt, parse_mode='Markdown', reply_markup=kb)
+            elif processing_msg:
+                await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=err_txt, parse_mode='Markdown', reply_markup=kb)
+            else:
+                await query.message.reply_text(err_txt, parse_mode='Markdown', reply_markup=kb)
+        except:
+            pass
+async def categorias_mes(query, context):
+    hoje = _now_sp()
+    mkey = _month_key_sp()
+    data_str = hoje.strftime("%B/%Y").title()
+    processing_msg = None
+    try:
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text("🔄 Gerando categorias do mês...", parse_mode='Markdown')
+        else:
+            processing_msg = await query.message.reply_text("🔄 Gerando categorias do mês...", parse_mode='Markdown')
+    except:
+        processing_msg = None
+    try:
+        qs = build_cliente_query_params(query)
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
+        url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
+        try:
+            geral_api, cat_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{get_cliente_id(query)}", ttl=20, timeout=4),
+                _req_json_cached_async(url, f"monthcats:{get_cliente_id(query)}:{mkey}", ttl=15, timeout=4),
+            )
+        except:
+            geral_api = {}
+            cat_api = {}
+        cats = cat_api.get("categorias", {}) if cat_api.get("sucesso") else {}
+        ce = dict(cats.get("despesas", {}) or {})
+        ci = dict(cats.get("receitas", {}) or {})
+        ce_items = sorted(((k, float(v or 0)) for k, v in ce.items()), key=lambda x: (-x[1], x[0]))[:12]
+        ci_items = sorted(((k, float(v or 0)) for k, v in ci.items()), key=lambda x: (-x[1], x[0]))[:12]
+        resposta = criar_cabecalho("CATEGORIAS DO MÊS", 40)
+        resposta += f"\n📅 {data_str}\n\n"
+        caixa1 = ""
+        caixa1 += "+" + ("-" * 32) + "+\n"
+        caixa1 += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=32)}|\n"
+        caixa1 += "+" + ("-" * 32) + "+\n"
+        for k, v in ce_items:
+            label = CATEGORY_NAMES.get(k, k)
+            caixa1 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
+        caixa1 += "+" + ("-" * 32) + "+\n"
+        caixa2 = ""
+        caixa2 += "+" + ("-" * 32) + "+\n"
+        caixa2 += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=32)}|\n"
+        caixa2 += "+" + ("-" * 32) + "+\n"
+        for k, v in ci_items:
+            label = CATEGORY_NAMES.get(k, k)
+            caixa2 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
+        caixa2 += "+" + ("-" * 32) + "+\n"
+        resposta += wrap_code_block(caixa1) + "\n" + wrap_code_block(caixa2) + "\n"
+        try:
+            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
+            saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
+        except:
+            saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        if hasattr(query, 'edit_message_text'):
+            await query.edit_message_text(resposta, parse_mode='Markdown', reply_markup=kb)
+        elif processing_msg:
+            await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=resposta, parse_mode='Markdown', reply_markup=kb)
+        else:
+            await query.message.reply_text(resposta, parse_mode='Markdown', reply_markup=kb)
+    except:
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Tentar novamente", callback_data="analise_mes_categorias")],
+            [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+        ])
+        err_txt = "⚠️ Erro ao carregar categorias do mês."
         try:
             if hasattr(query, 'edit_message_text'):
                 await query.edit_message_text(err_txt, parse_mode='Markdown', reply_markup=kb)
@@ -2302,12 +2228,7 @@ async def total_semana(query, context):
 # ===== FUNÇÕES RESTANTES (mantidas mas simplificadas) =====
 async def relatorio_categorias(query, context):
     """Relatório por categoria."""
-    await query.edit_message_text(
-        "🏷️ *RELATÓRIO POR CATEGORIA*\n\n"
-        "Esta funcionalidade está em desenvolvimento.\n\n"
-        "💡 Use \"/analise\" para ver a distribuição de gastos.",
-        parse_mode='Markdown'
-    )
+    await query.edit_message_text("🏷️ Use os botões de Totais do dia ou Totais do mês para ver categorias.", parse_mode='Markdown')
 
 async def extrato_detalhado(query, context):
     try:
@@ -3396,6 +3317,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             message_id=processing_msg.message_id,
             text=resposta,
             parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"), InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")]])
         )
         try:
             idx = {}
@@ -3658,6 +3580,7 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
             message_id=processing_msg.message_id,
             text=resposta,
             parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"), InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")]])
         )
         try:
             salvas_img = (data.get("salvas", []) if isinstance(data, dict) else []) or []
@@ -3990,8 +3913,8 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
         resposta += "📊 *Use /total para ver os totais atualizados*"
         keyboard = [
-            [InlineKeyboardButton("💰 VER TOTAIS DO DIA", callback_data="total_dia")],
-            [InlineKeyboardButton("📊 VER RESUMO", callback_data="resumo")]
+            [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"),
+             InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.edit_message_text(
@@ -4179,8 +4102,8 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
         resposta += "📊 *Use /total para ver os totais atualizados*"
         keyboard = [
-            [InlineKeyboardButton("💰 VER TOTAIS DO DIA", callback_data="total_dia")],
-            [InlineKeyboardButton("📊 VER RESUMO", callback_data="resumo")]
+            [InlineKeyboardButton("💰 TOTAIS DO DIA", callback_data="total_dia"),
+             InlineKeyboardButton("📅 TOTAIS DO MÊS", callback_data="analise_mes")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await context.bot.edit_message_text(
