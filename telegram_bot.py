@@ -392,7 +392,7 @@ def _scheduler_thread(interval_seconds: int = 60):
                 except:
                     saldo = 0.0
                 try:
-                    msg = "🔔 LEMBRETE: Registre suas transações hoje!\n\n" + f"💹 Saldo atual: {formatar_moeda(saldo, negrito=True)}"
+                    msg = "🔔 LEMBRETE: Registre suas transações hoje!\n\n" + f"💹 SALDO ATUAL REAL: {formatar_moeda(saldo, negrito=True)}"
                     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                     payload = {"chat_id": cid, "text": msg, "parse_mode": "Markdown"}
                     try:
@@ -1411,7 +1411,7 @@ async def relatorio_total(query, context):
         mkey = _month_key_sp()
         day_url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&{build_cliente_query_params(query)}"
         month_url = f"{API_URL}/saldo/atual?mes={mkey}&{build_cliente_query_params(query)}"
-        geral_url = f"{API_URL}/total/geral?{build_cliente_query_params(query)}"
+        geral_url = f"{API_URL}/saldo/atual?{build_cliente_query_params(query)}"
         try:
             day_api, mes_api, geral_api = await asyncio.gather(
                 _req_json_cached_async(day_url, f"day:{cid}:{dkey}", ttl=10, timeout=4),
@@ -1465,7 +1465,8 @@ async def relatorio_total(query, context):
         if tot.get('estornos', 0) > 0:
             resposta += f"🔁 Estornos do dia: {formatar_moeda(tot.get('estornos', 0), negrito=True)}\n\n"
         try:
-            saldo_geral = float(geral_api.get("total", {}).get("saldo", 0) or 0) if geral_api.get("sucesso") else 0.0
+            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
+            saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
         except:
             saldo_geral = obter_saldo_geral(get_cliente_id(query))
         resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
@@ -2073,7 +2074,11 @@ async def analise_mensal(query, context):
         resposta += wrap_code_block(caixa) + "\n\n"
         if estornos_mes > 0:
             resposta += f"↩️ *Estornos (mês):* {formatar_moeda(estornos_mes, negrito=True)}\n"
-        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(stats_mes['saldo'], negrito=True)}\n\n"
+        try:
+            saldo_geral = float((sum_api.get("total", {}) or {}).get("saldo_real", (sum_api.get("total", {}) or {}).get("saldo", 0)) or 0) if sum_api.get("sucesso") else obter_saldo_geral(get_cliente_id(query))
+        except:
+            saldo_geral = obter_saldo_geral(get_cliente_id(query))
+        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
         
         if dias_decorridos > 0:
             resposta += criar_secao("MÉDIAS DIÁRIAS")
@@ -2364,7 +2369,7 @@ async def extrato_detalhado(query, context):
         except:
             lista_tx = []
         linhas = "\n".join(lista_tx) if lista_tx else "📭 Nenhuma transação hoje"
-        rodape = f"\n💹 Saldo atual real: {formatar_moeda(saldo_real, negrito=True)}\n\n"
+        rodape = f"\n💹 SALDO ATUAL REAL: {formatar_moeda(saldo_real, negrito=True)}\n\n"
         texto = titulo + bloco + wrap_code_block(linhas) + rodape
         await query.edit_message_text(texto, parse_mode='Markdown')
     except:
@@ -3979,7 +3984,7 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
         except:
             pass
         saldo_geral = obter_saldo_geral(str(update.effective_chat.id))
-        resposta += f"💹 *Saldo final atual:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
+        resposta += f"💹 *SALDO ATUAL REAL:* {formatar_moeda(saldo_geral, negrito=True)}\n\n"
         if arq:
             safe_arq = md_escape(arq)
             resposta += f"💾 Salvo em: `{safe_arq}`\n\n"
@@ -4193,7 +4198,7 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             try:
                 qs = build_cliente_query_params(update)
                 t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
-                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
+                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/saldo/atual?{qs}", timeout=3))
                 extrato, sj = await asyncio.gather(t1, t2)
                 if extrato.get("sucesso"):
                     tot = extrato.get("total", {})
@@ -4206,8 +4211,8 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                     msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa)
                     try:
                         if sj.get("sucesso"):
-                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
-                            msg += f"\n\n💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
+                            s = float(sj.get("total", {}).get("saldo_real", sj.get("total", {}).get("saldo", 0)) or 0)
+                            msg += f"\n\n💹 *SALDO ATUAL REAL:* {formatar_moeda(s, negrito=True)}\n\n"
                     except:
                         pass
                     msg += "📊 *Use /total para ver os totais atualizados*"
@@ -4421,7 +4426,7 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             try:
                 qs = build_cliente_query_params(update)
                 t1 = asyncio.create_task(_req_json_async(f"{API_URL}/extrato/hoje?include_transacoes=false&{qs}", timeout=3))
-                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/total/geral?{qs}", timeout=3))
+                t2 = asyncio.create_task(_req_json_async(f"{API_URL}/saldo/atual?{qs}", timeout=3))
                 extrato, sj = await asyncio.gather(t1, t2)
                 if extrato.get("sucesso"):
                     tot = extrato.get("total", {})
@@ -4434,8 +4439,8 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                     msg = "💰 *TOTAIS DO DIA*\n" + wrap_code_block(caixa)
                     try:
                         if sj.get("sucesso"):
-                            s = float(sj.get("total", {}).get("saldo", 0) or 0)
-                            msg += f"\n\n💹 *Saldo final atual:* {formatar_moeda(s, negrito=True)}\n\n"
+                            s = float(sj.get("total", {}).get("saldo_real", sj.get("total", {}).get("saldo", 0)) or 0)
+                            msg += f"\n\n💹 *SALDO ATUAL REAL:* {formatar_moeda(s, negrito=True)}\n\n"
                     except:
                         pass
                     msg += "📊 *Use /total para ver os totais atualizados*"

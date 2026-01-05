@@ -843,14 +843,26 @@ def recompute_cliente_aggregates(cliente_id: str):
     root = _cliente_root(cliente_id)
     month_agg = {}
     days_processed = 0
+    day_keys = []
     try:
-        docs = list(root.collection("transacoes").stream())
+        for d in list(root.collection("transacoes").stream()):
+            di = str(d.id or "").strip()
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", di or ""):
+                day_keys.append(di)
     except Exception:
-        docs = []
-    for d in docs:
-        dr = str(d.id or "").strip()
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", dr or ""):
-            continue
+        pass
+    try:
+        for dd in list(root.collection("dias").stream()):
+            di = str(dd.id or "").strip()
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", di or ""):
+                day_keys.append(di)
+    except Exception:
+        pass
+    try:
+        day_keys = sorted(list(set(day_keys)))
+    except Exception:
+        day_keys = list(set(day_keys))
+    for dr in day_keys:
         total_entrada = 0.0
         total_saida = 0.0
         total_ajuste = 0.0
@@ -861,18 +873,52 @@ def recompute_cliente_aggregates(cliente_id: str):
         day_cat_exp = {}
         day_cat_est = {}
         day_cat_adj = {}
+        idx = {}
+        items = []
+        tops = []
         try:
             items = list(root.collection("transacoes").document(dr).collection("items").stream())
         except Exception:
             items = []
+        try:
+            tops = list(root.collection("transacoes").where("data_referencia", "==", dr).stream())
+        except Exception:
+            tops = []
+        def _sig(o):
+            try:
+                return str(o.get("ref_id") or "") or (str(o.get("tipo", "")) + "|" + str(float(o.get("valor", 0) or 0)) + "|" + str(o.get("categoria", "")) + "|" + str(o.get("descricao", "")) + "|" + str(o.get("timestamp_criacao", "")))
+            except Exception:
+                return str(o.get("ref_id") or "")
         for it in items:
             o = it.to_dict() or {}
-            if bool(o.get("estornado", False)):
+            k = _sig(o)
+            if idx.get(k):
                 continue
+            idx[k] = 1
             tp_raw = str(o.get("tipo", "")).strip().lower()
             cat = str(o.get("categoria", "outros") or "outros").strip().lower()
             val = float(o.get("valor", 0) or 0)
-            if tp_raw in ("1", "receita", "entrada"):
+            if tp_raw in ("estorno",):
+                total_estorno += abs(val)
+                mk = dr[:7]
+                m = month_agg.setdefault(mk, {
+                    "total_entrada": 0.0,
+                    "total_saida": 0.0,
+                    "total_ajuste": 0.0,
+                    "total_estorno": 0.0,
+                    "quantidade_transacoes": 0,
+                    "quantidade_transacoes_validas": 0,
+                    "categorias_entrada": {},
+                    "categorias_saida": {},
+                    "categorias_estorno": {},
+                    "categorias_ajuste": {},
+                })
+                m["total_estorno"] += abs(val)
+                m["categorias_estorno"][cat] = float(m["categorias_estorno"].get(cat, 0.0) or 0.0) + abs(val)
+                day_cat_est[cat] = float(day_cat_est.get(cat, 0.0) or 0.0) + abs(val)
+            elif bool(o.get("estornado", False)):
+                pass
+            elif tp_raw in ("1", "receita", "entrada"):
                 total_entrada += val
                 qtd += 1
                 qtd_validas += 1
@@ -938,7 +984,16 @@ def recompute_cliente_aggregates(cliente_id: str):
                 m["quantidade_transacoes_validas"] += 1
                 m["categorias_ajuste"][cat] = float(m["categorias_ajuste"].get(cat, 0.0) or 0.0) + val
                 day_cat_adj[cat] = float(day_cat_adj.get(cat, 0.0) or 0.0) + val
-            elif tp_raw in ("estorno",):
+        for it in tops:
+            o = it.to_dict() or {}
+            k = _sig(o)
+            if idx.get(k):
+                continue
+            idx[k] = 1
+            tp_raw = str(o.get("tipo", "")).strip().lower()
+            cat = str(o.get("categoria", "outros") or "outros").strip().lower()
+            val = float(o.get("valor", 0) or 0)
+            if tp_raw in ("estorno",):
                 total_estorno += abs(val)
                 mk = dr[:7]
                 m = month_agg.setdefault(mk, {
@@ -954,9 +1009,76 @@ def recompute_cliente_aggregates(cliente_id: str):
                     "categorias_ajuste": {},
                 })
                 m["total_estorno"] += abs(val)
-                m["categorias_estorno"][cat] = float(m["categorias_estorno"].get(cat, 0.0) or 0.0) + abs(val
-                )
+                m["categorias_estorno"][cat] = float(m["categorias_estorno"].get(cat, 0.0) or 0.0) + abs(val)
                 day_cat_est[cat] = float(day_cat_est.get(cat, 0.0) or 0.0) + abs(val)
+            elif bool(o.get("estornado", False)):
+                pass
+            elif tp_raw in ("1", "receita", "entrada"):
+                total_entrada += val
+                qtd += 1
+                qtd_validas += 1
+                mk = dr[:7]
+                m = month_agg.setdefault(mk, {
+                    "total_entrada": 0.0,
+                    "total_saida": 0.0,
+                    "total_ajuste": 0.0,
+                    "total_estorno": 0.0,
+                    "quantidade_transacoes": 0,
+                    "quantidade_transacoes_validas": 0,
+                    "categorias_entrada": {},
+                    "categorias_saida": {},
+                    "categorias_estorno": {},
+                    "categorias_ajuste": {},
+                })
+                m["total_entrada"] += val
+                m["quantidade_transacoes"] += 1
+                m["quantidade_transacoes_validas"] += 1
+                m["categorias_entrada"][cat] = float(m["categorias_entrada"].get(cat, 0.0) or 0.0) + val
+                day_cat_inc[cat] = float(day_cat_inc.get(cat, 0.0) or 0.0) + val
+            elif tp_raw in ("0", "despesa", "saida"):
+                total_saida += val
+                qtd += 1
+                qtd_validas += 1
+                mk = dr[:7]
+                m = month_agg.setdefault(mk, {
+                    "total_entrada": 0.0,
+                    "total_saida": 0.0,
+                    "total_ajuste": 0.0,
+                    "total_estorno": 0.0,
+                    "quantidade_transacoes": 0,
+                    "quantidade_transacoes_validas": 0,
+                    "categorias_entrada": {},
+                    "categorias_saida": {},
+                    "categorias_estorno": {},
+                    "categorias_ajuste": {},
+                })
+                m["total_saida"] += val
+                m["quantidade_transacoes"] += 1
+                m["quantidade_transacoes_validas"] += 1
+                m["categorias_saida"][cat] = float(m["categorias_saida"].get(cat, 0.0) or 0.0) + val
+                day_cat_exp[cat] = float(day_cat_exp.get(cat, 0.0) or 0.0) + val
+            elif tp_raw in ("ajuste",):
+                total_ajuste += val
+                qtd += 1
+                qtd_validas += 1
+                mk = dr[:7]
+                m = month_agg.setdefault(mk, {
+                    "total_entrada": 0.0,
+                    "total_saida": 0.0,
+                    "total_ajuste": 0.0,
+                    "total_estorno": 0.0,
+                    "quantidade_transacoes": 0,
+                    "quantidade_transacoes_validas": 0,
+                    "categorias_entrada": {},
+                    "categorias_saida": {},
+                    "categorias_estorno": {},
+                    "categorias_ajuste": {},
+                })
+                m["total_ajuste"] += val
+                m["quantidade_transacoes"] += 1
+                m["quantidade_transacoes_validas"] += 1
+                m["categorias_ajuste"][cat] = float(m["categorias_ajuste"].get(cat, 0.0) or 0.0) + val
+                day_cat_adj[cat] = float(day_cat_adj.get(cat, 0.0) or 0.0) + val
         saldo_dia = total_entrada - total_saida + total_ajuste
         try:
             root.collection("dias").document(dr).set({

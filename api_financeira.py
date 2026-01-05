@@ -1925,17 +1925,31 @@ def saldo_atual():
                     saldo_real = None
             else:
                 # Sem intervalo: somar todos os meses do cliente
+                sr = 0.0
+                sr_count = 0
                 for m in root.collection('meses').stream():
                     mm = m.to_dict() or {}
                     total_despesas += float(mm.get("total_saida", 0) or 0)
                     total_receitas += float(mm.get("total_entrada", 0) or 0)
                     total_ajustes += float(mm.get("total_ajuste", 0) or 0)
                     total_estornos += float(mm.get("total_estorno", 0) or 0)
+                    try:
+                        v = float(mm.get("saldo_mes")) if mm.get("saldo_mes") is not None else (
+                            float(mm.get("total_entrada", 0) or 0) - float(mm.get("total_saida", 0) or 0) + float(mm.get("total_ajuste", 0) or 0)
+                        )
+                    except:
+                        v = (float(mm.get("total_entrada", 0) or 0) - float(mm.get("total_saida", 0) or 0) + float(mm.get("total_ajuste", 0) or 0))
+                    sr += float(v or 0)
+                    sr_count += 1
                 try:
                     base_root = root.get().to_dict() or {}
-                    saldo_real = float(base_root.get("saldo_real")) if base_root.get("saldo_real") is not None else None
+                    saldo_real_root = float(base_root.get("saldo_real")) if base_root.get("saldo_real") is not None else None
                 except:
-                    saldo_real = None
+                    saldo_real_root = None
+                try:
+                    saldo_real = float(sr) if sr_count > 0 else (saldo_real_root if saldo_real_root is not None else None)
+                except:
+                    saldo_real = saldo_real_root
             saldo = total_receitas - total_despesas + total_ajustes
             if mes:
                 try:
