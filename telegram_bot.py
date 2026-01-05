@@ -2163,40 +2163,49 @@ async def categorias_mes(query, context):
             return r - d
         ordenadas = sorted(((k, v) for k, v in grupos.items()), key=lambda x: (-sum(float(it.get('valor', 0) or 0) for it in x[1] if it.get('tipo') == 'saida'), x[0]))
         ordenadas = ordenadas[:8] if len(ordenadas) > 8 else ordenadas
-        resposta = criar_cabecalho("CATEGORIAS DO MÊS", 40)
+        resposta = criar_cabecalho("RESUMO DO MÊS", 40)
         resposta += f"\n📅 {data_str}\n\n"
         tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
         tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
-        def _pct(v, tot):
-            try:
-                return f"{(float(v or 0) / float(tot or 1)) * 100:.1f}%"
-            except:
-                return "0.0%"
-        for k, lst in ordenadas:
+        mapa_desp = {}
+        mapa_rec = {}
+        for k, lst in grupos.items():
+            dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+            rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+            if dd > 0:
+                mapa_desp[k] = dd
+            if rr > 0:
+                mapa_rec[k] = rr
+        desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
+        rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+        for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            desp_cat = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-            rec_cat = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-            resposta += f"📌 *{label}*\n"
-            if desp_cat > 0:
-                resposta += f"   🔴 Despesas: {formatar_moeda(desp_cat, negrito=True)} — {_pct(desp_cat, tot_despesas)} do período\n"
-                for it in sorted([x for x in lst if x['tipo']=='saida'], key=lambda x: -float(x['valor']))[:3]:
-                    resposta += f"      🔴 {formatar_moeda(it['valor'])} — {md_escape(it['descricao'])}\n"
-            if rec_cat > 0:
-                resposta += f"   🟢 Receitas: {formatar_moeda(rec_cat, negrito=True)} — {_pct(rec_cat, tot_receitas)} do período\n"
-                for it in sorted([x for x in lst if x['tipo']=='entrada'], key=lambda x: -float(x['valor']))[:3]:
-                    resposta += f"      🟢 {formatar_moeda(it['valor'])} — {md_escape(it['descricao'])}\n"
-            resposta += "\n"
+            resposta += f"  {label}        {formatar_moeda(v, negrito=False)}\n"
+        resposta += "\nENTRADAS\n"
+        for k, v in rec_sorted:
+            label = CATEGORY_NAMES.get(k, k)
+            resposta += f"  {label}        +{formatar_moeda(v, negrito=False)}\n"
+        saldo_mes = tot_receitas - tot_despesas
+        resposta += f"\nSaldo do mês: {formatar_moeda(saldo_mes, negrito=True)}\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
         except:
             saldo_geral = obter_saldo_geral(get_cliente_id(query))
-        resposta += f"💹 Saldo atual real: {formatar_moeda(saldo_geral, negrito=True)}\n"
         cat_buttons = []
         row = []
-        for k, _ in ordenadas:
+        for k, _v in desp_sorted[:9]:
             label = CATEGORY_NAMES.get(k, k)
             row.append(InlineKeyboardButton(label, callback_data=f"catmes:{k}"))
+            if len(row) >= 3:
+                cat_buttons.append(row)
+                row = []
+        if row:
+            cat_buttons.append(row)
+        row = []
+        for k, _v in rec_sorted[:6]:
+            label = CATEGORY_NAMES.get(k, k)
+            row.append(InlineKeyboardButton(f"Entradas: {label}", callback_data=f"catmes:{k}"))
             if len(row) >= 3:
                 cat_buttons.append(row)
                 row = []
