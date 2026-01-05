@@ -1942,40 +1942,55 @@ async def categorias_dia(query, context):
         processing_msg = None
     try:
         qs = build_cliente_query_params(query)
+        cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
-        url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&group_by=categoria&{qs}"
+        cat_url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&group_by=categoria&{qs}"
+        extrato_url = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
         try:
-            geral_api, cat_api = await asyncio.gather(
-                _req_json_cached_async(geral_url, f"geral:{get_cliente_id(query)}", ttl=20, timeout=4),
-                _req_json_cached_async(url, f"daycats:{get_cliente_id(query)}:{dkey}", ttl=10, timeout=4),
+            geral_api, cat_api, extrato_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
+                _req_json_cached_async(cat_url, f"daycats:{cid}:{dkey}", ttl=10, timeout=4),
+                _req_json_cached_async(extrato_url, f"extrato:{cid}:{dkey}", ttl=8, timeout=5),
             )
         except:
             geral_api = {}
             cat_api = {}
-        cats = cat_api.get("categorias", {}) if cat_api.get("sucesso") else {}
-        ce = dict(cats.get("despesas", {}) or {})
-        ci = dict(cats.get("receitas", {}) or {})
-        ce_items = sorted(((k, float(v or 0)) for k, v in ce.items()), key=lambda x: (-x[1], x[0]))[:9]
-        ci_items = sorted(((k, float(v or 0)) for k, v in ci.items()), key=lambda x: (-x[1], x[0]))[:9]
+            extrato_api = {}
+        transacoes = extrato_api.get("transacoes", []) if extrato_api.get("sucesso") else []
+        grupos = {}
+        for t in transacoes or []:
+            if t.get('estornado'):
+                continue
+            tp_raw = str(t.get('tipo', '')).strip().lower()
+            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
+                continue
+            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+            grupos.setdefault(cat, []).append({
+                "tipo": ('saida' if tp_raw in ('0', 'despesa', 'saida') else 'entrada'),
+                "valor": float(t.get('valor', 0) or 0),
+                "descricao": str(t.get('descricao', '') or '')
+            })
+        def _tot_cat(lst):
+            d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+            r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+            return r - d
+        ordenadas = sorted(((k, v) for k, v in grupos.items()), key=lambda x: (-sum(float(it.get('valor', 0) or 0) for it in x[1] if it.get('tipo') == 'saida'), x[0]))
+        ordenadas = ordenadas[:6] if len(ordenadas) > 6 else ordenadas
         resposta = criar_cabecalho("CATEGORIAS DO DIA", 40)
         resposta += f"\n📅 {data_str}\n\n"
-        caixa1 = ""
-        caixa1 += "+" + ("-" * 32) + "+\n"
-        caixa1 += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=32)}|\n"
-        caixa1 += "+" + ("-" * 32) + "+\n"
-        for k, v in ce_items:
+        for k, lst in ordenadas:
             label = CATEGORY_NAMES.get(k, k)
-            caixa1 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
-        caixa1 += "+" + ("-" * 32) + "+\n"
-        caixa2 = ""
-        caixa2 += "+" + ("-" * 32) + "+\n"
-        caixa2 += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=32)}|\n"
-        caixa2 += "+" + ("-" * 32) + "+\n"
-        for k, v in ci_items:
-            label = CATEGORY_NAMES.get(k, k)
-            caixa2 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
-        caixa2 += "+" + ("-" * 32) + "+\n"
-        resposta += wrap_code_block(caixa1) + "\n" + wrap_code_block(caixa2) + "\n"
+            total_real = _tot_cat(lst)
+            header = ""
+            header += "+" + ("-" * 32) + "+\n"
+            header += f"|{criar_linha_tabela(label, formatar_moeda(total_real, negrito=False), True, '', largura=32)}|\n"
+            header += "+" + ("-" * 32) + "+\n"
+            resposta += wrap_code_block(header) + "\n"
+            linhas = []
+            for it in sorted(lst, key=lambda x: (-1 if x['tipo']=='saida' else 0, -float(x['valor']))):
+                emoji = "🔴" if it['tipo'] == 'saida' else "🟢"
+                linhas.append(f"{emoji} {formatar_moeda(it['valor'])} — `{md_escape(it['descricao'])}`")
+            resposta += "\n".join(linhas) + "\n\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
@@ -2021,40 +2036,86 @@ async def categorias_mes(query, context):
         processing_msg = None
     try:
         qs = build_cliente_query_params(query)
+        cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
-        url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
         try:
-            geral_api, cat_api = await asyncio.gather(
-                _req_json_cached_async(geral_url, f"geral:{get_cliente_id(query)}", ttl=20, timeout=4),
-                _req_json_cached_async(url, f"monthcats:{get_cliente_id(query)}:{mkey}", ttl=15, timeout=4),
-            )
+            geral_api = await _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4)
         except:
             geral_api = {}
-            cat_api = {}
-        cats = cat_api.get("categorias", {}) if cat_api.get("sucesso") else {}
-        ce = dict(cats.get("despesas", {}) or {})
-        ci = dict(cats.get("receitas", {}) or {})
-        ce_items = sorted(((k, float(v or 0)) for k, v in ce.items()), key=lambda x: (-x[1], x[0]))[:12]
-        ci_items = sorted(((k, float(v or 0)) for k, v in ci.items()), key=lambda x: (-x[1], x[0]))[:12]
+        transacoes = []
+        try:
+            db = get_db()
+            root = db.collection('clientes').document(str(cid))
+            ano, m = mkey.split("-")
+            dt_ini = f"{ano}-{m}-01"
+            if m == "12":
+                dt_fim = f"{int(ano)+1}-01-01"
+            else:
+                dt_fim = f"{ano}-{int(m)+1:02d}-01"
+            cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+            end = datetime.strptime(dt_fim, "%Y-%m-%d")
+            idx = {}
+            tl = []
+            while cur < end:
+                dkey = cur.strftime("%Y-%m-%d")
+                try:
+                    items = root.collection('transacoes').document(dkey).collection('items').stream()
+                except:
+                    items = []
+                try:
+                    tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
+                except:
+                    tops = []
+                for d in items:
+                    o = d.to_dict() or {}
+                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+                    if not idx.get(k):
+                        idx[k] = 1
+                        tl.append(o)
+                for d in tops:
+                    o = d.to_dict() or {}
+                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+                    if not idx.get(k):
+                        idx[k] = 1
+                        tl.append(o)
+                cur = cur + timedelta(days=1)
+            transacoes = tl
+        except:
+            transacoes = []
+        grupos = {}
+        for t in transacoes or []:
+            if t.get('estornado'):
+                continue
+            tp_raw = str(t.get('tipo', '')).strip().lower()
+            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
+                continue
+            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+            grupos.setdefault(cat, []).append({
+                "tipo": ('saida' if tp_raw in ('0', 'despesa', 'saida') else 'entrada'),
+                "valor": float(t.get('valor', 0) or 0),
+                "descricao": str(t.get('descricao', '') or '')
+            })
+        def _tot_cat(lst):
+            d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+            r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+            return r - d
+        ordenadas = sorted(((k, v) for k, v in grupos.items()), key=lambda x: (-sum(float(it.get('valor', 0) or 0) for it in x[1] if it.get('tipo') == 'saida'), x[0]))
+        ordenadas = ordenadas[:8] if len(ordenadas) > 8 else ordenadas
         resposta = criar_cabecalho("CATEGORIAS DO MÊS", 40)
         resposta += f"\n📅 {data_str}\n\n"
-        caixa1 = ""
-        caixa1 += "+" + ("-" * 32) + "+\n"
-        caixa1 += f"|{criar_linha_tabela('DESPESAS', '', False, '', largura=32)}|\n"
-        caixa1 += "+" + ("-" * 32) + "+\n"
-        for k, v in ce_items:
+        for k, lst in ordenadas:
             label = CATEGORY_NAMES.get(k, k)
-            caixa1 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
-        caixa1 += "+" + ("-" * 32) + "+\n"
-        caixa2 = ""
-        caixa2 += "+" + ("-" * 32) + "+\n"
-        caixa2 += f"|{criar_linha_tabela('RECEITAS', '', False, '', largura=32)}|\n"
-        caixa2 += "+" + ("-" * 32) + "+\n"
-        for k, v in ci_items:
-            label = CATEGORY_NAMES.get(k, k)
-            caixa2 += f"|{criar_linha_tabela(label, formatar_moeda(v, negrito=False), True, '', largura=32)}|\n"
-        caixa2 += "+" + ("-" * 32) + "+\n"
-        resposta += wrap_code_block(caixa1) + "\n" + wrap_code_block(caixa2) + "\n"
+            total_real = _tot_cat(lst)
+            header = ""
+            header += "+" + ("-" * 32) + "+\n"
+            header += f"|{criar_linha_tabela(label, formatar_moeda(total_real, negrito=False), True, '', largura=32)}|\n"
+            header += "+" + ("-" * 32) + "+\n"
+            resposta += wrap_code_block(header) + "\n"
+            linhas = []
+            for it in sorted(lst, key=lambda x: (-1 if x['tipo']=='saida' else 0, -float(x['valor']))):
+                emoji = "🔴" if it['tipo'] == 'saida' else "🟢"
+                linhas.append(f"{emoji} {formatar_moeda(it['valor'])} — `{md_escape(it['descricao'])}`")
+            resposta += "\n".join(linhas) + "\n\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
