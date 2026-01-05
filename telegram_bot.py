@@ -796,6 +796,17 @@ def formatar_data_br(s: str) -> str:
         d, mm, y = m2.groups()
         return f"{int(d):02d}/{int(mm):02d}/{y}"
     return t
+
+def _mes_ano_pt(dt):
+    nomes = [
+        "janeiro", "fevereiro", "março", "abril", "maio", "junho",
+        "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"
+    ]
+    try:
+        nome = nomes[int(dt.month) - 1].capitalize()
+        return f"{nome}/{int(dt.year)}"
+    except:
+        return dt.strftime("%m/%Y")
 def _debitos_header(compact: bool) -> str:
     if compact:
         return f"{'VENC':<10} {'DESCR':<12} {'VALOR':>9} {'ST':^1}\n"
@@ -2097,7 +2108,7 @@ async def categorias_dia(query, context):
 async def categorias_mes(query, context):
     hoje = _now_sp()
     mkey = _month_key_sp()
-    data_str = hoje.strftime("%B/%Y").title()
+    data_str = _mes_ano_pt(hoje)
     processing_msg = None
     try:
         if hasattr(query, 'edit_message_text'):
@@ -2176,7 +2187,8 @@ async def categorias_mes(query, context):
             d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
             r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
             return r - d
-        resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n\n"
+        resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n"
+        resposta += f"📅 {data_str}\n\n"
         tot_despesas = 0.0
         tot_receitas = 0.0
         mapa_desp = {}
