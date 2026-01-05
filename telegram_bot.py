@@ -2184,8 +2184,18 @@ async def categorias_mes(query, context):
         mapa_rec = {}
         if cat_api.get("sucesso") and isinstance(cat_api.get("categorias"), dict):
             try:
-                mapa_desp = dict((cat_api.get("categorias") or {}).get("despesas") or {})
-                mapa_rec = dict((cat_api.get("categorias") or {}).get("receitas") or {})
+                cats = (cat_api.get("categorias") or {})
+                mapa_desp = dict(cats.get("despesas") or {})
+                mapa_est = dict(cats.get("estornos") or {})
+                try:
+                    keys_all = set(list(mapa_desp.keys()) + list(mapa_est.keys()))
+                    mapa_desp = {k: float(mapa_desp.get(k, 0) or 0) - float(mapa_est.get(k, 0) or 0) for k in keys_all}
+                    mapa_desp = {k: float(v or 0) for k, v in mapa_desp.items() if float(v or 0) > 0}
+                except:
+                    mapa_desp = {k: float(v or 0) for k, v in mapa_desp.items() if float(v or 0) > 0}
+                raw_rec = dict(cats.get("receitas") or {})
+                income_keys = {"salario", "vendas", "outros"}
+                mapa_rec = {k: float(raw_rec.get(k, 0) or 0) for k in raw_rec.keys() if k in income_keys and float(raw_rec.get(k, 0) or 0) > 0}
             except:
                 mapa_desp = {}
                 mapa_rec = {}
@@ -2193,12 +2203,15 @@ async def categorias_mes(query, context):
                 tot = cat_api.get("total") or {}
                 tot_despesas = float(tot.get("despesas", 0) or 0)
                 tot_receitas = float(tot.get("receitas", 0) or 0)
+                tot_ajustes = float(tot.get("ajustes", 0) or 0)
             except:
                 tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
                 tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
+                tot_ajustes = 0.0
         else:
             tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
             tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
+            tot_ajustes = 0.0
             for k, lst in grupos.items():
                 dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
                 rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
@@ -2206,6 +2219,11 @@ async def categorias_mes(query, context):
                     mapa_desp[k] = dd
                 if rr > 0:
                     mapa_rec[k] = rr
+            try:
+                income_keys = {"salario", "vendas", "outros"}
+                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
+            except:
+                pass
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
         labels = [CATEGORY_NAMES.get(k, k) for k, _ in (desp_sorted + rec_sorted)]
@@ -2221,7 +2239,14 @@ async def categorias_mes(query, context):
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
             resposta += f"  {pad(label)}+{formatar_moeda(v, negrito=False)}\n"
-        saldo_mes = tot_receitas - tot_despesas
+        try:
+            tot_obj = (cat_api.get("total") or {}) if cat_api.get("sucesso") else {}
+        except:
+            tot_obj = {}
+        try:
+            saldo_mes = float(tot_obj.get("saldo")) if tot_obj.get("saldo") is not None else (tot_receitas - tot_despesas + float(tot_ajustes or 0))
+        except:
+            saldo_mes = tot_receitas - tot_despesas + float(tot_ajustes or 0)
         resposta += f"\nSaldo do mês: {formatar_moeda(saldo_mes, negrito=True)}\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
