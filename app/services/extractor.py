@@ -451,15 +451,30 @@ def extrair_informacoes_financeiras(texto_usuario):
         ai_resultados = []
         if client is not None:
             try:
-                resposta = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction="Você é um classificador financeiro PT-BR multimodal. Obedeça estritamente às diretrizes: categoria específica (evitar 'outros'), descrição profissional concisa e consistente entre texto/áudio/imagem/PDF. Retorne SOMENTE JSON válido.",
-                        temperature=0.1,
-                        max_output_tokens=512,
-                    ),
-                )
+                try:
+                    contents = [types.Content(role='user', parts=[types.Part(text=prompt)])]
+                    resposta = client.models.generate_content(
+                        model='gemini-1.5-flash',
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction="Você é um classificador financeiro PT-BR multimodal. Obedeça estritamente às diretrizes: categoria específica (evitar 'outros'), descrição profissional concisa e consistente entre texto/áudio/imagem/PDF. Retorne SOMENTE JSON válido.",
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                            max_output_tokens=512,
+                        ),
+                    )
+                except Exception:
+                    contents = [types.Content(role='user', parts=[types.Part(text=prompt)])]
+                    resposta = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction="Você é um classificador financeiro PT-BR multimodal. Obedeça estritamente às diretrizes: categoria específica (evitar 'outros'), descrição profissional concisa e consistente entre texto/áudio/imagem/PDF. Retorne SOMENTE JSON válido.",
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                            max_output_tokens=512,
+                        ),
+                    )
                 resposta_texto = resposta.text.strip()
                 resposta_texto = resposta_texto.replace('```json', '').replace('```', '').strip()
                 json_match = re.search(r'\[.*\]', resposta_texto, re.DOTALL)

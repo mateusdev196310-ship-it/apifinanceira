@@ -4,6 +4,7 @@ import re
 import json
 from typing import List, Dict, Optional, Tuple, Union
 from app.services.gemini import get_client
+from google.genai import types
 import numpy as np
 from app.services.rule_based import parse_value
 
@@ -174,6 +175,11 @@ def _try_gemini_transacoes(texto: str) -> Optional[List[Dict]]:
         resposta = cli.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+                max_output_tokens=800,
+            ),
         )
         out = (getattr(resposta, "text", "") or "").strip()
         if not out:
