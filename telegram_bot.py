@@ -2166,7 +2166,7 @@ async def categorias_mes(query, context):
                 except:
                     mapa_desp = {k: float(v or 0) for k, v in mapa_desp.items() if float(v or 0) > 0}
                 raw_rec = dict(cats.get("receitas") or {})
-                income_keys = {"salario", "vendas", "outros"}
+                income_keys = {"salario", "vendas", "outros", "receita", "pix recebido"}
                 mapa_rec = {k: float(raw_rec.get(k, 0) or 0) for k in raw_rec.keys() if k in income_keys and float(raw_rec.get(k, 0) or 0) > 0}
             except:
                 mapa_desp = {}
@@ -2218,7 +2218,7 @@ async def categorias_mes(query, context):
                         mapa_desp[k] = dd
                     if rr > 0:
                         mapa_rec[k] = rr
-                income_keys = {"salario", "vendas", "outros"}
+                income_keys = {"salario", "vendas", "outros", "receita", "pix recebido"}
                 mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
             except:
                 pass
@@ -2243,7 +2243,7 @@ async def categorias_mes(query, context):
                         mapa_desp[cat] = float(mapa_desp.get(cat, 0) or 0) + val
                     elif tp == "entrada" and val > 0:
                         mapa_rec[cat] = float(mapa_rec.get(cat, 0) or 0) + val
-                income_keys = {"salario", "vendas", "outros"}
+                income_keys = {"salario", "vendas", "outros", "receita", "pix recebido"}
                 mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
                 tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
                 tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
