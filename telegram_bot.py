@@ -2158,13 +2158,7 @@ async def categorias_mes(query, context):
                 tot_despesas = sum(float(v or 0) for v in dict(mm.get("categorias_saida", {}) or {}).values())
                 tot_receitas = sum(float(v or 0) for v in dict(mm.get("categorias_entrada", {}) or {}).values())
                 saldo_mes = tot_receitas - tot_despesas
-        need_refetch = False
-        try:
-            sum_liquido = sum(float(v or 0) for v in (categorias_despesas or {}).values())
-            if (not categorias_despesas) or (float(tot_despesas or 0) > 0 and abs(float(sum_liquido or 0) - float(tot_despesas or 0)) > 1e-6):
-                need_refetch = True
-        except:
-            need_refetch = (not categorias_despesas)
+        need_refetch = True
         if not mm or need_refetch:
             try:
                 ano, m = mkey.split("-")
@@ -2209,17 +2203,22 @@ async def categorias_mes(query, context):
             need_refetch_rec = (not categorias_receitas)
         if need_refetch_rec:
             try:
-                ano, m = mkey.split("-")
+                try:
+                    ano, m = mkey.split("-")
+                except:
+                    ano, m = hoje.strftime("%Y"), hoje.strftime("%m")
                 dt_ini = f"{ano}-{m}-01"
-                if m == "12":
-                    dt_fim = f"{int(ano)+1}-01-01"
-                else:
-                    dt_fim = f"{ano}-{int(m)+1:02d}-01"
+                dt_fim = f"{int(ano)+1}-01-01" if m == "12" else f"{ano}-{int(m)+1:02d}-01"
                 agg_inc = {}
-                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                end = datetime.strptime(dt_fim, "%Y-%m-%d")
+                try:
+                    cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+                    end = datetime.strptime(dt_fim, "%Y-%m-%d")
+                except:
+                    cur = _now_sp()
+                    end = cur
                 while cur < end:
                     dkey = cur.strftime("%Y-%m-%d")
+                    dd = {}
                     try:
                         dd = root.collection('dias').document(dkey).get().to_dict() or {}
                     except:
@@ -2247,8 +2246,35 @@ async def categorias_mes(query, context):
                 saldo_mes = float(tot_all.get("saldo", (tot_receitas - tot_despesas)) or (tot_receitas - tot_despesas))
         except:
             pass
+        try:
+            url_cg = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
+            cg_api = await _req_json_cached_async(url_cg, f"cg:{cid}:{mkey}", ttl=12, timeout=5)
+            if cg_api.get("sucesso"):
+                cg = cg_api.get("categorias", {}) or {}
+                d_g = dict(cg.get("despesas", {}) or {})
+                e_g = dict(cg.get("estornos", {}) or {})
+                r_g = dict(cg.get("receitas", {}) or {})
+                base_keys = set(list(d_g.keys()) + list(e_g.keys()))
+                d_net = {str(k).strip().lower(): float(d_g.get(k, 0) or 0) - float(e_g.get(k, 0) or 0) for k in base_keys}
+                for k, v in d_net.items():
+                    if float(v or 0) > 0 and str(k).strip().lower() not in categorias_despesas:
+                        categorias_despesas[str(k).strip().lower()] = float(v or 0)
+                for k, v in (r_g or {}).items():
+                    kk = str(k).strip().lower()
+                    if float(v or 0) > 0 and kk not in categorias_receitas:
+                        categorias_receitas[kk] = float(v or 0)
+        except:
+            pass
         categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
         categorias_receitas = {k: float(v or 0) for k, v in (categorias_receitas or {}).items() if float(v or 0) > 0}
+        try:
+            if "transporte" in categorias_receitas:
+                tv = float(categorias_receitas.get("transporte", 0) or 0)
+                if tv > 0:
+                    categorias_despesas["transporte"] = float(categorias_despesas.get("transporte", 0) or 0) + tv
+                    categorias_receitas.pop("transporte", None)
+        except:
+            pass
         try:
             if saldo_mes == 0 and (tot_despesas > 0 or tot_receitas > 0):
                 saldo_mes = float(tot_receitas or 0) - float(tot_despesas or 0) + float((mm or {}).get("total_ajuste", 0) or 0)
