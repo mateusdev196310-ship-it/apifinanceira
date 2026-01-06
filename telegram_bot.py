@@ -2255,14 +2255,15 @@ async def categorias_mes(query, context):
                 e_g = dict(cg.get("estornos", {}) or {})
                 r_g = dict(cg.get("receitas", {}) or {})
                 base_keys = set(list(d_g.keys()) + list(e_g.keys()))
-                d_net = {str(k).strip().lower(): float(d_g.get(k, 0) or 0) - float(e_g.get(k, 0) or 0) for k in base_keys}
-                for k, v in d_net.items():
-                    if float(v or 0) > 0 and str(k).strip().lower() not in categorias_despesas:
-                        categorias_despesas[str(k).strip().lower()] = float(v or 0)
-                for k, v in (r_g or {}).items():
-                    kk = str(k).strip().lower()
-                    if float(v or 0) > 0 and kk not in categorias_receitas:
-                        categorias_receitas[kk] = float(v or 0)
+                categorias_despesas = {str(k).strip().lower(): float(d_g.get(k, 0) or 0) - float(e_g.get(k, 0) or 0) for k in base_keys}
+                categorias_receitas = {str(k).strip().lower(): float(v or 0) for k, v in (r_g or {}).items()}
+                tot_cg = cg_api.get("total", {}) or {}
+                try:
+                    tot_despesas = float(tot_cg.get("despesas", tot_despesas) or tot_despesas)
+                    tot_receitas = float(tot_cg.get("receitas", tot_receitas) or tot_receitas)
+                    saldo_mes = float(tot_cg.get("saldo", (tot_receitas - tot_despesas)) or (tot_receitas - tot_despesas))
+                except:
+                    pass
         except:
             pass
         categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
