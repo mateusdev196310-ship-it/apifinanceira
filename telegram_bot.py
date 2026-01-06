@@ -2118,26 +2118,24 @@ async def categorias_mes(query, context):
         qs = build_cliente_query_params(query)
         cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
-        cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
+        extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=2000&{qs}"
         try:
-            geral_api, cat_api = await asyncio.gather(
+            geral_api, extrato_api = await asyncio.gather(
                 _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
-                _req_json_cached_async(cat_group_url, f"catgrp:{cid}:{mkey}", ttl=10, timeout=5),
+                _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}:rebuild", ttl=10, timeout=6),
             )
         except:
             geral_api = {}
-            cat_api = {}
-        transacoes = []
+            extrato_api = {}
+        transacoes = extrato_api.get("matches", []) if extrato_api.get("sucesso") else []
         grupos = {}
         for t in transacoes or []:
-            if t.get('estornado'):
-                continue
             tp_raw = str(t.get('tipo', '')).strip().lower()
-            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
+            if tp_raw not in ('saida', 'entrada'):
                 continue
             cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
             grupos.setdefault(cat, []).append({
-                "tipo": ('saida' if tp_raw in ('0', 'despesa', 'saida') else 'entrada'),
+                "tipo": tp_raw,
                 "valor": float(t.get('valor', 0) or 0),
                 "descricao": str(t.get('descricao', '') or '')
             })
@@ -2151,155 +2149,43 @@ async def categorias_mes(query, context):
         tot_receitas = 0.0
         mapa_desp = {}
         mapa_rec = {}
-        if cat_api.get("sucesso") and isinstance(cat_api.get("categorias"), dict):
-            try:
-                cats = (cat_api.get("categorias") or {})
-                mapa_desp = dict(cats.get("despesas") or {})
-                mapa_est = dict(cats.get("estornos") or {})
-                try:
-                    keys_all = set(list(mapa_desp.keys()) + list(mapa_est.keys()))
-                    mapa_desp = {k: float(mapa_desp.get(k, 0) or 0) - float(mapa_est.get(k, 0) or 0) for k in keys_all}
-                    mapa_desp = {k: float(v or 0) for k, v in mapa_desp.items() if float(v or 0) > 0}
-                except:
-                    mapa_desp = {k: float(v or 0) for k, v in mapa_desp.items() if float(v or 0) > 0}
-                raw_rec = dict(cats.get("receitas") or {})
-                mapa_rec = {k: float(raw_rec.get(k, 0) or 0) for k in raw_rec.keys() if float(raw_rec.get(k, 0) or 0) > 0}
-            except:
-                mapa_desp = {}
-                mapa_rec = {}
-            try:
-                tot = cat_api.get("total") or {}
-                tot_despesas = float(tot.get("despesas", 0) or 0)
-                tot_receitas = float(tot.get("receitas", 0) or 0)
-                tot_ajustes = float(tot.get("ajustes", 0) or 0)
-            except:
-                try:
-                    total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
-                    tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
-                    if tm_api.get("sucesso"):
-                        tot_all = tm_api.get("total", {}) or {}
-                        tot_despesas = float(tot_all.get("despesas", 0) or 0)
-                        tot_receitas = float(tot_all.get("receitas", 0) or 0)
-                        tot_ajustes = float(tot_all.get("ajustes", 0) or 0)
-                    else:
-                        tot_despesas = 0.0
-                        tot_receitas = 0.0
-                        tot_ajustes = 0.0
-                except:
-                    tot_despesas = 0.0
-                    tot_receitas = 0.0
-                    tot_ajustes = 0.0
-        else:
-            try:
-                total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
-                tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
-                if tm_api.get("sucesso"):
-                    tot_all = tm_api.get("total", {}) or {}
-                    tot_despesas = float(tot_all.get("despesas", 0) or 0)
-                    tot_receitas = float(tot_all.get("receitas", 0) or 0)
-                    tot_ajustes = float(tot_all.get("ajustes", 0) or 0)
-                else:
-                    tot_despesas = 0.0
-                    tot_receitas = 0.0
-                    tot_ajustes = 0.0
-            except:
-                tot_despesas = 0.0
-                tot_receitas = 0.0
+        try:
+            for k, lst in grupos.items():
+                dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+                rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+                if dd > 0:
+                    mapa_desp[k] = dd
+                if rr > 0:
+                    mapa_rec[k] = rr
+        except:
+            mapa_desp = {}
+            mapa_rec = {}
+        tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
+        tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
+        try:
+            total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
+            tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}:aj", ttl=12, timeout=4)
+            if tm_api.get("sucesso"):
+                tot_all = tm_api.get("total", {}) or {}
+                tot_ajustes = float(tot_all.get("ajustes", 0) or 0)
+            else:
                 tot_ajustes = 0.0
-            try:
-                for k, lst in grupos.items():
-                    dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-                    rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-                    if dd > 0:
-                        mapa_desp[k] = dd
-                    if rr > 0:
-                        mapa_rec[k] = rr
-                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
-            except:
-                pass
+        except:
+            tot_ajustes = 0.0
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        if len(desp_sorted) == 0 or len(rec_sorted) == 0:
-            try:
-                extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=1000&{qs}"
-                extrato_api = await _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}:all", ttl=10, timeout=5)
-            except:
-                extrato_api = {}
-            try:
-                matches = extrato_api.get("matches", []) if extrato_api.get("sucesso") else []
-            except:
-                matches = []
-            try:
-                agg_desp = {}
-                agg_rec = {}
-                for t in matches:
-                    tp = str(t.get("tipo", "")).strip().lower()
-                    cat = str(t.get("categoria", "outros") or "outros").strip().lower()
-                    val = float(t.get("valor", 0) or 0)
-                    if tp == "saida" and val > 0:
-                        if cat not in mapa_desp:
-                            agg_desp[cat] = float(agg_desp.get(cat, 0) or 0) + val
-                    elif tp == "entrada" and val > 0:
-                        if cat not in mapa_rec:
-                            agg_rec[cat] = float(agg_rec.get(cat, 0) or 0) + val
-                for k, v in agg_desp.items():
-                    if k not in mapa_desp and float(v or 0) > 0:
-                        mapa_desp[k] = float(v or 0)
-                for k, v in agg_rec.items():
-                    if k not in mapa_rec and float(v or 0) > 0:
-                        mapa_rec[k] = float(v or 0)
-                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
-                tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
-                tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
-            except:
-                tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
-                tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
-            desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
-            rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        if len(desp_sorted) == 0:
+        # Se ainda vazio, tenta fallback mínimo via /categorias/mes (apenas despesas líquidas)
+        if len(desp_sorted) == 0 and len(rec_sorted) == 0:
             try:
                 catmes_url = f"{API_URL}/categorias/mes?mes={mkey}&{qs}"
-                catmes_api = await _req_json_cached_async(catmes_url, f"catmes:{cid}:{mkey}", ttl=10, timeout=5)
-            except:
-                catmes_api = {}
-            try:
+                catmes_api = await _req_json_cached_async(catmes_url, f"catmes:{cid}:{mkey}:fallback", ttl=8, timeout=5)
                 if catmes_api.get("sucesso"):
-                    cats_exp = dict(catmes_api.get("categorias") or {})
-                    for k, v in cats_exp.items():
+                    for k, v in dict(catmes_api.get("categorias") or {}).items():
                         val = float(v or 0)
                         if val > 0:
                             mapa_desp[k] = val
-                    try:
-                        tot_despesas = float(catmes_api.get("total_despesas", 0) or 0)
-                    except:
-                        tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
                     desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
-            except:
-                pass
-        if len(rec_sorted) == 0:
-            try:
-                extrato_mes_url2 = f"{API_URL}/extrato/mes?mes={mkey}&limit=1000&{qs}"
-                extrato_api2 = await _req_json_cached_async(extrato_mes_url2, f"xmes2:{cid}:{mkey}:all", ttl=10, timeout=5)
-            except:
-                extrato_api2 = {}
-            try:
-                matches2 = extrato_api2.get("matches", []) if extrato_api2.get("sucesso") else []
-            except:
-                matches2 = []
-            try:
-                agg_rec2 = {}
-                for t in matches2:
-                    tp = str(t.get("tipo", "")).strip().lower()
-                    cat = str(t.get("categoria", "outros") or "outros").strip().lower()
-                    val = float(t.get("valor", 0) or 0)
-                    if tp == "entrada" and val > 0:
-                        agg_rec2[cat] = float(agg_rec2.get(cat, 0) or 0) + val
-                for k, v in agg_rec2.items():
-                    if float(v or 0) > 0:
-                        mapa_rec[k] = float(v or 0)
-                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
-                tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
-                rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+                    tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
             except:
                 pass
         largura = 28
