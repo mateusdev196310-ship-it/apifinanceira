@@ -1802,7 +1802,7 @@ async def relatorio_diario(query, context):
 async def analise_mensal(query, context):
     """Gera análise mensal detalhada."""
     hoje = _now_sp()
-    data_str = hoje.strftime("%B/%Y").title()
+    data_str = _mes_ano_pt(hoje)
     dias_no_mes = calendar.monthrange(hoje.year, hoje.month)[1]
     dias_decorridos = hoje.day
     
@@ -2131,45 +2131,6 @@ async def categorias_mes(query, context):
             geral_api = {}
             cat_api = {}
         transacoes = []
-        try:
-            db = get_db()
-            root = db.collection('clientes').document(str(cid))
-            ano, m = mkey.split("-")
-            dt_ini = f"{ano}-{m}-01"
-            if m == "12":
-                dt_fim = f"{int(ano)+1}-01-01"
-            else:
-                dt_fim = f"{ano}-{int(m)+1:02d}-01"
-            cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-            end = datetime.strptime(dt_fim, "%Y-%m-%d")
-            idx = {}
-            tl = []
-            while cur < end:
-                dkey = cur.strftime("%Y-%m-%d")
-                try:
-                    items = root.collection('transacoes').document(dkey).collection('items').stream()
-                except:
-                    items = []
-                try:
-                    tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
-                except:
-                    tops = []
-                for d in items:
-                    o = d.to_dict() or {}
-                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                    if not idx.get(k):
-                        idx[k] = 1
-                        tl.append(o)
-                for d in tops:
-                    o = d.to_dict() or {}
-                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                    if not idx.get(k):
-                        idx[k] = 1
-                        tl.append(o)
-                cur = cur + timedelta(days=1)
-            transacoes = tl
-        except:
-            transacoes = []
         grupos = {}
         for t in transacoes or []:
             if t.get('estornado'):
@@ -2216,21 +2177,47 @@ async def categorias_mes(query, context):
                 tot_receitas = float(tot.get("receitas", 0) or 0)
                 tot_ajustes = float(tot.get("ajustes", 0) or 0)
             except:
-                tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
-                tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
-                tot_ajustes = 0.0
+                try:
+                    total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
+                    tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
+                    if tm_api.get("sucesso"):
+                        tot_all = tm_api.get("total", {}) or {}
+                        tot_despesas = float(tot_all.get("despesas", 0) or 0)
+                        tot_receitas = float(tot_all.get("receitas", 0) or 0)
+                        tot_ajustes = float(tot_all.get("ajustes", 0) or 0)
+                    else:
+                        tot_despesas = 0.0
+                        tot_receitas = 0.0
+                        tot_ajustes = 0.0
+                except:
+                    tot_despesas = 0.0
+                    tot_receitas = 0.0
+                    tot_ajustes = 0.0
         else:
-            tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
-            tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
-            tot_ajustes = 0.0
-            for k, lst in grupos.items():
-                dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-                rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-                if dd > 0:
-                    mapa_desp[k] = dd
-                if rr > 0:
-                    mapa_rec[k] = rr
             try:
+                total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
+                tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
+                if tm_api.get("sucesso"):
+                    tot_all = tm_api.get("total", {}) or {}
+                    tot_despesas = float(tot_all.get("despesas", 0) or 0)
+                    tot_receitas = float(tot_all.get("receitas", 0) or 0)
+                    tot_ajustes = float(tot_all.get("ajustes", 0) or 0)
+                else:
+                    tot_despesas = 0.0
+                    tot_receitas = 0.0
+                    tot_ajustes = 0.0
+            except:
+                tot_despesas = 0.0
+                tot_receitas = 0.0
+                tot_ajustes = 0.0
+            try:
+                for k, lst in grupos.items():
+                    dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
+                    rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
+                    if dd > 0:
+                        mapa_desp[k] = dd
+                    if rr > 0:
+                        mapa_rec[k] = rr
                 income_keys = {"salario", "vendas", "outros"}
                 mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
             except:
@@ -2479,64 +2466,34 @@ async def detalhar_categoria_mes(query, context, categoria_key: str, off_saida: 
             geral_api = await _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4)
         except:
             geral_api = {}
-        transacoes = []
-        try:
-            db = get_db()
-            root = db.collection('clientes').document(str(cid))
-            ano, m = mkey.split("-")
-            dt_ini = f"{ano}-{m}-01"
-            if m == "12":
-                dt_fim = f"{int(ano)+1}-01-01"
-            else:
-                dt_fim = f"{ano}-{int(m)+1:02d}-01"
-            cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-            end = datetime.strptime(dt_fim, "%Y-%m-%d")
-            idx = {}
-            tl = []
-            while cur < end:
-                dkey = cur.strftime("%Y-%m-%d")
-                try:
-                    items = root.collection('transacoes').document(dkey).collection('items').stream()
-                except:
-                    items = []
-                try:
-                    tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
-                except:
-                    tops = []
-                for d in items:
-                    o = d.to_dict() or {}
-                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                    if not idx.get(k):
-                        idx[k] = 1
-                        tl.append(o)
-                for d in tops:
-                    o = d.to_dict() or {}
-                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                    if not idx.get(k):
-                        idx[k] = 1
-                        tl.append(o)
-                cur = cur + timedelta(days=1)
-            transacoes = tl
-        except:
-            transacoes = []
         cslug = str(categoria_key or "outros").strip().lower()
+        extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&categoria={cslug}&limit=200&{qs}"
+        try:
+            extrato_api = await _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}:{cslug}", ttl=12, timeout=5)
+        except:
+            extrato_api = {}
         itens = []
-        for t in transacoes or []:
-            if t.get("estornado"):
-                continue
-            tp_raw = str(t.get("tipo", "")).strip().lower()
-            if tp_raw not in ("0","despesa","saida","1","receita","entrada"):
-                continue
-            cat = str(t.get("categoria","outros") or "outros").strip().lower()
-            if cat != cslug:
-                continue
-            itens.append({
-                "tipo": ("saida" if tp_raw in ("0","despesa","saida") else "entrada"),
-                "valor": float(t.get("valor",0) or 0),
-                "descricao": str(t.get("descricao","") or "")
-            })
-        tot_despesas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('0','despesa','saida') and not t.get('estornado'))
-        tot_receitas = sum(float(t.get('valor', 0) or 0) for t in transacoes if str(t.get('tipo', '')).strip().lower() in ('1','receita','entrada') and not t.get('estornado'))
+        try:
+            for t in (extrato_api.get("matches", []) if extrato_api.get("sucesso") else []):
+                tp_raw = str(t.get("tipo", "")).strip().lower()
+                if tp_raw not in ("saida","entrada"):
+                    continue
+                itens.append({
+                    "tipo": tp_raw,
+                    "valor": float(t.get("valor",0) or 0),
+                    "descricao": str(t.get("descricao","") or "")
+                })
+        except:
+            itens = []
+        try:
+            total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
+            tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
+            tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
+            tot_despesas = float(tot_all.get("despesas", 0) or 0)
+            tot_receitas = float(tot_all.get("receitas", 0) or 0)
+        except:
+            tot_despesas = 0.0
+            tot_receitas = 0.0
         saida = [x for x in itens if x['tipo'] == 'saida']
         entrada = [x for x in itens if x['tipo'] == 'entrada']
         label = CATEGORY_NAMES.get(cslug, cslug)

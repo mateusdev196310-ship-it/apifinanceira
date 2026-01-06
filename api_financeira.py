@@ -1325,6 +1325,149 @@ def extrato_hoje():
     except Exception as e:
         return jsonify({"sucesso": False, "erro": str(e)}), 500
 
+@app.route('/extrato/mes', methods=['GET'])
+def extrato_mes():
+    mes_qs = request.args.get("mes")
+    mes_atual = mes_qs or _month_key_sp()
+    categoria_qs = request.args.get("categoria")
+    offset_qs = int(request.args.get("offset", "0") or "0")
+    limit_qs = int(request.args.get("limit", "50") or "50")
+    try:
+        db = get_db()
+        cliente_id = str(request.args.get("cliente_id") or "default")
+        cliente_nome = request.args.get("cliente_nome")
+        cliente_username = request.args.get("username")
+        try:
+            ensure_cliente(cliente_id, nome=cliente_nome, username=cliente_username)
+        except:
+            pass
+        ano, m = mes_atual.split("-")
+        dt_ini = f"{ano}-{m}-01"
+        if m == "12":
+            dt_fim = f"{int(ano)+1}-01-01"
+        else:
+            dt_fim = f"{ano}-{int(m)+1:02d}-01"
+        root = db.collection('clientes').document(cliente_id)
+        matches = []
+        try:
+            q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
+            if categoria_qs:
+                q = q.where('categoria', '==', str(categoria_qs).strip().lower())
+            tops = q.stream()
+        except:
+            tops = []
+        idx = {}
+        for it in tops:
+            o = it.to_dict() or {}
+            if bool(o.get('estornado', False)):
+                continue
+            k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+            if idx.get(k):
+                continue
+            idx[k] = 1
+            tp_raw = str(o.get('tipo', '')).strip().lower()
+            tp = ('entrada' if tp_raw in ('1','receita','entrada') else ('saida' if tp_raw in ('0','despesa','saida') else tp_raw))
+            cat = str(o.get('categoria','outros') or 'outros').strip().lower()
+            if categoria_qs and cat != str(categoria_qs).strip().lower():
+                continue
+            val = float(o.get('valor', 0) or 0)
+            dr = str(o.get('data_referencia') or '')
+            ts_str = ''
+            try:
+                ts = o.get('timestamp_criacao')
+                if ts:
+                    ts_str = str(ts)
+            except:
+                ts_str = ''
+            safe = {
+                "valor": val,
+                "tipo": tp,
+                "categoria": cat,
+                "descricao": str(o.get('descricao', '')),
+                "data_referencia": dr,
+                "timestamp_criacao": ts_str,
+            }
+            matches.append(safe)
+        try:
+            cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+            end = datetime.strptime(dt_fim, "%Y-%m-%d")
+            while cur < end:
+                dkey = cur.strftime("%Y-%m-%d")
+                try:
+                    dd = root.collection('dias').document(dkey).get().to_dict() or {}
+                except:
+                    dd = {}
+                need = True
+                if categoria_qs:
+                    try:
+                        v1 = float((dd.get("categorias_saida", {}) or {}).get(str(categoria_qs).strip().lower(), 0) or 0)
+                        v2 = float((dd.get("categorias_entrada", {}) or {}).get(str(categoria_qs).strip().lower(), 0) or 0)
+                        need = (v1 > 0 or v2 > 0)
+                    except:
+                        need = True
+                if not need:
+                    cur = cur + timedelta(days=1)
+                    continue
+                try:
+                    items = root.collection('transacoes').document(dkey).collection('items')
+                    if categoria_qs:
+                        items = items.where('categoria', '==', str(categoria_qs).strip().lower())
+                    docs = items.stream()
+                except:
+                    docs = []
+                for it in docs:
+                    o = it.to_dict() or {}
+                    if bool(o.get('estornado', False)):
+                        continue
+                    k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
+                    if idx.get(k):
+                        continue
+                    idx[k] = 1
+                    tp_raw = str(o.get('tipo', '')).strip().lower()
+                    tp = ('entrada' if tp_raw in ('1','receita','entrada') else ('saida' if tp_raw in ('0','despesa','saida') else tp_raw))
+                    cat = str(o.get('categoria','outros') or 'outros').strip().lower()
+                    if categoria_qs and cat != str(categoria_qs).strip().lower():
+                        continue
+                    val = float(o.get('valor', 0) or 0)
+                    dr = dkey
+                    ts_str = ''
+                    try:
+                        ts = o.get('timestamp_criacao')
+                        if ts:
+                            ts_str = str(ts)
+                    except:
+                        ts_str = ''
+                    safe = {
+                        "valor": val,
+                        "tipo": tp,
+                        "categoria": cat,
+                        "descricao": str(o.get('descricao', '')),
+                        "data_referencia": dr,
+                        "timestamp_criacao": ts_str,
+                    }
+                    matches.append(safe)
+                cur = cur + timedelta(days=1)
+        except:
+            pass
+        try:
+            matches = sorted(matches, key=lambda x: float(x.get('valor', 0)), reverse=True)
+        except:
+            pass
+        total_saida_cat = sum(float(x.get('valor', 0) or 0) for x in matches if str(x.get('tipo','')).strip().lower() == 'saida')
+        total_entrada_cat = sum(float(x.get('valor', 0) or 0) for x in matches if str(x.get('tipo','')).strip().lower() == 'entrada')
+        l = max(0, limit_qs)
+        o = max(0, offset_qs)
+        page = matches[o:o+l] if l > 0 else matches[o:]
+        return jsonify({
+            "sucesso": True,
+            "mes": mes_atual,
+            "quantidade": len(page),
+            "matches": page,
+            "total_saida_categoria": float(total_saida_cat or 0),
+            "total_entrada_categoria": float(total_entrada_cat or 0),
+        })
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
 @app.route('/total/mes', methods=['GET'])
 def total_mes():
     """Retorna totais do mês atual ou do mês fornecido."""
