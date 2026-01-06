@@ -2233,16 +2233,24 @@ async def categorias_mes(query, context):
             except:
                 matches = []
             try:
+                agg_desp = {}
+                agg_rec = {}
                 for t in matches:
                     tp = str(t.get("tipo", "")).strip().lower()
                     cat = str(t.get("categoria", "outros") or "outros").strip().lower()
                     val = float(t.get("valor", 0) or 0)
                     if tp == "saida" and val > 0:
                         if cat not in mapa_desp:
-                            mapa_desp[cat] = val
+                            agg_desp[cat] = float(agg_desp.get(cat, 0) or 0) + val
                     elif tp == "entrada" and val > 0:
                         if cat not in mapa_rec:
-                            mapa_rec[cat] = val
+                            agg_rec[cat] = float(agg_rec.get(cat, 0) or 0) + val
+                for k, v in agg_desp.items():
+                    if k not in mapa_desp and float(v or 0) > 0:
+                        mapa_desp[k] = float(v or 0)
+                for k, v in agg_rec.items():
+                    if k not in mapa_rec and float(v or 0) > 0:
+                        mapa_rec[k] = float(v or 0)
                 mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
                 tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
                 tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
