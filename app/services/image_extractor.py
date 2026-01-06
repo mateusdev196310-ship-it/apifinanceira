@@ -10,7 +10,7 @@ from datetime import datetime
 from app.services.gemini import get_client
 from google.genai import types
 from app.services.extractor import extrair_informacoes_financeiras
-from app.services.rule_based import detect_category, clean_desc, naturalize_description, detect_category_with_confidence
+
 
 def _infer_fields(tl: str, tp: str):
     s = (tl or "").lower()
@@ -261,18 +261,22 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
         if not transcrito:
             if client is not None:
                 try:
+                    from app.constants.categories import CATEGORY_LIST
+                    cat_list = ", ".join(CATEGORY_LIST)
                     prompt_img = (
-                        "Analise a imagem enviada e extraia transações financeiras. "
-                        "Retorne APENAS um ARRAY JSON:\n"
+                        "Analise a imagem (comprovante/recibo/extrato) e identifique TODAS as transações financeiras.\n"
+                        "Retorne SOMENTE um ARRAY JSON onde cada item tenha:\n"
                         "[\n"
                         "  {\n"
                         '    "tipo": "0" para despesa ou "1" para receita,\n'
-                        '    "valor": número decimal com duas casas,\n'
-                        '    "categoria": "alimentacao" | "transporte" | "lazer" | "vestuario" | "vendas" | "salario" | "servicos" | "moradia" | "saude" | "outros",\n'
-                        '    "descricao": "descrição breve"\n'
+                        '    "valor": número decimal,\n'
+                        f'    "categoria": uma de [{cat_list}],\n'
+                        '    "descricao": frase profissional breve (3–8 palavras),\n'
+                        '    "moeda": "BRL"\n'
                         "  }\n"
                         "]\n"
-                        "Se não houver descrição clara, use 'Gasto por Imagem' ou 'Receita por Imagem'."
+                        "Regras: use contexto real para categoria e descrição; evite 'outros' ao máximo (use 'duvida' só sem pistas); padronize nomes; reformule termos informais.\n"
+                        "Exemplos: 'feira' → categoria 'alimentacao', descrição 'Feira'; 'supermercado' → categoria 'alimentacao', descrição 'Supermercado'; 'mandei pro cara do uber' → categoria 'transporte', descrição 'Transporte por Aplicativo'.\n"
                     )
                     contents_img = _contents(prompt_img, blob)
                     try:
@@ -315,8 +319,6 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                                 valor = float(item.get('valor', 0) or 0)
                                 cat = str(item.get('categoria', 'outros')).strip().lower() or 'outros'
                                 desc_raw = str(item.get('descricao', '')).strip()
-                                if not desc_raw:
-                                    desc_raw = 'Gasto por Imagem' if tipo == '0' else 'Receita por Imagem'
                                 fctx = _infer_fields(transcrito, tipo)
                                 out_img.append({
                                     "tipo": tipo,
@@ -328,6 +330,8 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                                     "estabelecimento": fctx.get("estabelecimento", ""),
                                     "recebedor": fctx.get("recebedor", ""),
                                     "data_transacao": fctx.get("data_transacao", ""),
+                                    "pendente_confirmacao": (cat in ("outros", "duvida")),
+                                    "confidence_score": float(0.6 if cat in ("outros", "duvida") else 0.9),
                                 })
                             except:
                                 continue
@@ -335,208 +339,19 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                             return out_img
                 except:
                     pass
-            try:
-                contents_vals = _contents("Liste todos os VALORES MONETÁRIOS visíveis na imagem (R$, números com vírgula ou ponto). Retorne APENAS um ARRAY JSON de números. Exemplo: [12.34, 35.90]", blob)
-                try:
-                    resp_vals = client.models.generate_content(
-                        model='gemini-1.5-flash',
-                        contents=contents_vals,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.0,
-                            max_output_tokens=400,
-                        ),
-                    )
-                except Exception:
-                    resp_vals = client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=contents_vals,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.0,
-                            max_output_tokens=400,
-                        ),
-                    )
-                texto_vals = (resp_vals.text or "").strip()
-                try:
-                    arr_vals = json.loads(texto_vals)
-                    if isinstance(arr_vals, dict):
-                        arr_vals = list(arr_vals.values())
-                except:
-                    arr_vals = []
-                num_vals = [float(x) for x in arr_vals if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace(',', '.').replace(' ', '').replace('\u00a0', '').replace('R$', '').strip())]
-                if num_vals:
-                    valor = max([float(str(v).replace(',', '.')) for v in num_vals])
-                    tipo = '0'
-                    cat, conf = detect_category_with_confidence(clean_desc(transcrito.lower())) if transcrito else ('outros', 0.2)
-                    tlv = (transcrito or "").lower()
-                    def _nat(tl, tp, ct):
-                        s = tl or ""
-                        m = re.search(r'(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
-                        if m:
-                            return f"{m.group(1)} {m.group(2)}".strip()
-                        if tp == '1':
-                            if re.search(r'sal[áa]ri', s):
-                                return 'salário'
-                            if re.search(r'vend', s):
-                                return 'vendas'
-                            if 'pix' in s or 'depósito' in s or 'deposito' in s:
-                                return 'pix recebido'
-                            return 'receita'
-                        else:
-                            if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
-                                return 'mercado'
-                            if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
-                                return 'farmácia'
-                            if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
-                                return 'restaurante'
-                            if re.search(r'\buber\b', s, re.IGNORECASE):
-                                return 'uber'
-                            if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
-                                return 'combustível'
-                            if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
-                                return 'internet'
-                            if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
-                                return 'moradia'
-                            return ct or 'outros'
-                    desc_base = _nat(tlv, tipo, cat)
-                    desc = naturalize_description(tipo, cat, desc_base)
-                    fctx = _infer_fields(transcrito, tipo)
-                    return [{
-                        "tipo": tipo,
-                        "valor": float(valor),
-                        "categoria": cat,
-                        "descricao": desc,
-                        "moeda": "BRL",
-                        "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-                        "estabelecimento": fctx.get("estabelecimento", ""),
-                        "recebedor": fctx.get("recebedor", ""),
-                        "data_transacao": fctx.get("data_transacao", ""),
-                        "confidence_score": float(conf),
-                        "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
-                    }]
-            except:
-                pass
-            return []
-        tl0 = transcrito.lower()
-        def _best_valor(tl: str):
-            lines = [x.strip().lower() for x in (tl or "").splitlines() if str(x).strip()]
-            prox_pix = set()
-            for i, ln in enumerate(lines):
-                if 'pix' in ln:
-                    prox_pix.add(i)
-                    if i > 0:
-                        prox_pix.add(i - 1)
-                    if i + 1 < len(lines):
-                        prox_pix.add(i + 1)
-            pat_money = r'(?:r\$\s*)?(\d{1,3}(?:[.\s\u00a0]\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})'
-            res = []
-            for i, ln in enumerate(lines):
-                if re.search(r'cnpj|cpf', ln, re.IGNORECASE):
-                    continue
-                for m in re.finditer(pat_money, ln, re.IGNORECASE):
-                    try:
-                        raw = m.group(1)
-                        if ',' in raw:
-                            val = float(raw.replace('.', '').replace(',', '.'))
-                        else:
-                            val = float(raw)
-                        score = 0
-                        if 'pix' in ln:
-                            score += 5
-                        if i in prox_pix:
-                            score += 3
-                        if re.search(r'\bvalor\b|\btotal\b|\bpagamento\b|\bpago\b', ln, re.IGNORECASE):
-                            score += 3
-                        if 'r$' in ln:
-                            score += 2
-                        if ',' in raw:
-                            score += 1
-                        res.append((val, score, i))
-                    except:
-                        continue
-            if not res:
-                return None
-            res.sort(key=lambda x: (x[1], x[2]), reverse=True)
-            return res[0][0]
-        v0 = _best_valor(tl0)
-        if v0 is not None:
-            tipo0 = '0'
-            if re.search(r'\b(recebi|recebido|recebimento)\b', tl0, re.IGNORECASE) or 'pix recebido' in tl0 or 'credito na conta' in tl0 or 'crédito na conta' in tl0 or 'deposito' in tl0 or 'depósito' in tl0:
-                tipo0 = '1'
-            tl0_san = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', tl0, flags=re.IGNORECASE)
-            tl0_san = re.sub(r'\binternet\s+banking\b', '', tl0_san, flags=re.IGNORECASE)
-            cat0, conf0 = detect_category_with_confidence(clean_desc(tl0_san))
-            if tipo0 == '0' and cat0 == 'vendas':
-                cat0 = 'outros'
-            def _nat0(tl, tp, ct):
-                s = tl or ""
-                m = re.search(r'\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
-                if m:
-                    return f"{m.group(1)} {m.group(2)}".strip()
-                if tp == '1':
-                    if re.search(r'sal[áa]ri', s):
-                        return 'salário'
-                    if re.search(r'vend', s):
-                        return 'vendas'
-                    if re.search(r'\bpix\b', s, re.IGNORECASE) or 'depósito' in s or 'deposito' in s:
-                        return 'pix recebido'
-                    return 'receita'
-                else:
-                    if re.search(r'\bpix\b', s, re.IGNORECASE):
-                        return 'pix'
-                    if re.search(r'\btransfer\w*\b', s, re.IGNORECASE):
-                        return 'transferência'
-                    if re.search(r'\bcart[ãa]o\b|\bcr[eé]dito\b|\bd[ée]bito\b', s, re.IGNORECASE):
-                        return 'cartão'
-                    if re.search(r'\bboleto\b', s, re.IGNORECASE):
-                        return 'boleto'
-                    if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
-                        return 'mercado'
-                    if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
-                        return 'farmácia'
-                    if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
-                        return 'restaurante'
-                    if re.search(r'\buber\b', s, re.IGNORECASE):
-                        return 'uber'
-                    if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
-                        return 'combustível'
-                    if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
-                        return 'internet'
-                    if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
-                        return 'moradia'
-                    return ct or 'outros'
-            base0 = _nat0(tl0, tipo0, cat0)
-            desc0 = naturalize_description(tipo0, cat0, base0)
-            try:
-                print("[image_extractor] regex_fallback_hit")
-            except:
-                pass
-            fctx = _infer_fields(transcrito, tipo0)
-            return [{
-                "tipo": tipo0,
-                "valor": float(v0),
-                "categoria": cat0,
-                "descricao": desc0,
-                "moeda": "BRL",
-                "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-                "estabelecimento": fctx.get("estabelecimento", ""),
-                "recebedor": fctx.get("recebedor", ""),
-                "data_transacao": fctx.get("data_transacao", ""),
-                "confidence_score": float(conf0),
-                "pendente_confirmacao": (cat0 == 'outros') or (float(conf0) < 0.9),
-            }]
         prompt_json = (
-            "Com base no texto transcrito abaixo, extraia transações financeiras e retorne APENAS um ARRAY JSON:\n"
+            "Com base no TEXTO transcrito do comprovante abaixo, extraia transações financeiras e retorne SOMENTE um ARRAY JSON:\n"
             "[\n"
             "  {\n"
             '    "tipo": "0" para despesa ou "1" para receita,\n'
-            '    "valor": número decimal com duas casas,\n'
-            '    "categoria": "alimentacao" | "transporte" | "lazer" | "vestuario" | "vendas" | "salario" | "servicos" | "moradia" | "saude" | "outros",\n'
-            '    "descricao": "descrição breve"\n'
+            '    "valor": número decimal,\n'
+            f'    "categoria": uma de [{", ".join(__import__("app.constants.categories", fromlist=["CATEGORY_LIST"]).CATEGORY_LIST)}],\n'
+            '    "descricao": frase profissional breve (3–8 palavras),\n'
+            '    "moeda": "BRL"\n'
             "  }\n"
             "]\n"
-            "Se não houver descrição clara, use o método de pagamento identificado ou 'Gasto por Imagem'.\n"
+            "Regras: evite 'outros' ao máximo; use 'duvida' só sem pistas; padronize descrições; reformule termos informais.\n"
+            "Exemplos: 'feira' → 'alimentacao'/'Feira'; 'supermercado' → 'alimentacao'/'Supermercado'; 'mandei pro cara do uber' → 'transporte'/'Transporte por Aplicativo'.\n"
             "Texto transcrito:\n"
             f"{transcrito}"
         )
@@ -581,115 +396,19 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     valor = float(item.get('valor', 0) or 0)
                     cat = str(item.get('categoria', 'outros')).strip().lower() or 'outros'
                     desc_raw = str(item.get('descricao', '')).strip()
-                    if not desc_raw:
-                        tlm = (transcrito or "").lower()
-                        def _nat2(tl, tp, ct):
-                            s = tl or ""
-                            m = re.search(r'(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
-                            if m:
-                                return f"{m.group(1)} {m.group(2)}".strip()
-                            if tp == '1':
-                                if re.search(r'sal[áa]ri', s):
-                                    return 'salário'
-                                if re.search(r'vend', s):
-                                    return 'vendas'
-                                if 'pix' in s or 'depósito' in s or 'deposito' in s:
-                                    return 'pix recebido'
-                                return 'receita'
-                            else:
-                                if 'pix' in s:
-                                    return 'pix'
-                                if re.search(r'transfer', s):
-                                    return 'transferência'
-                                if re.search(r'cart[ãa]o|cr[eé]dito|d[ée]bito', s):
-                                    return 'cartão'
-                                if 'boleto' in s:
-                                    return 'boleto'
-                                if re.search(r'mercado|supermercado', s):
-                                    return 'mercado'
-                                if re.search(r'farm[áa]cia', s):
-                                    return 'farmácia'
-                                if re.search(r'restaurante|pizza|lanche|hamburg', s):
-                                    return 'restaurante'
-                                if 'uber' in s:
-                                    return 'uber'
-                                if re.search(r'gasolina|combust[ií]vel', s):
-                                    return 'combustível'
-                                if re.search(r'internet|streaming|assinatura|telefonia', s):
-                                    return 'internet'
-                                if re.search(r'aluguel|condom[ií]nio|energia|[áa]gua|luz', s):
-                                    return 'moradia'
-                                return ct or 'outros'
-                        base = _nat2(tlm, tipo, cat)
-                        desc_raw = naturalize_description(tipo, cat, base)
                     out2.append({
                         "tipo": tipo,
                         "valor": valor,
                         "categoria": cat,
                         "descricao": desc_raw,
                         "moeda": "BRL",
-                        "confidence_score": float(0.95 if re.search(r'\b(mercado|supermercado|farmácia|restaurante|padaria|uber|gasolina|internet|aluguel)\b', tlm, re.IGNORECASE) else 0.5),
-                        "pendente_confirmacao": (cat == 'outros') or (not re.search(r'\b(mercado|supermercado|farmácia|restaurante|padaria|uber|gasolina|internet|aluguel)\b', tlm, re.IGNORECASE)),
+                        "confidence_score": float(0.9 if cat not in ("outros", "duvida") else 0.6),
+                        "pendente_confirmacao": (cat in ("outros", "duvida")),
                     })
                 except:
                     continue
             if out2:
                 return out2
-        # Fallback adicional: peça somente valores monetários em JSON e derive transação
-        try:
-            contents_vals = _contents("Liste todos os VALORES MONETÁRIOS visíveis na imagem (R$, números com vírgula ou ponto). Retorne APENAS um ARRAY JSON de números. Exemplo: [12.34, 35.90]", blob)
-            try:
-                resp_vals = client.models.generate_content(
-                    model='gemini-1.5-flash',
-                    contents=contents_vals,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0,
-                        max_output_tokens=400,
-                    ),
-                )
-            except Exception:
-                resp_vals = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=contents_vals,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0,
-                        max_output_tokens=400,
-                    ),
-                )
-            texto_vals = (resp_vals.text or "").strip()
-            try:
-                arr_vals = json.loads(texto_vals)
-                if isinstance(arr_vals, dict):
-                    arr_vals = list(arr_vals.values())
-            except:
-                arr_vals = []
-            num_vals = [float(x) for x in arr_vals if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace(',', '.').replace(' ', '').replace('\u00a0', '').replace('R$', '').strip())]
-            if num_vals:
-                valor = max([float(str(v).replace(',', '.')) for v in num_vals])
-                tipo = '0'
-                _t = (transcrito or "").lower()
-                _t = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', _t, flags=re.IGNORECASE)
-                _t = re.sub(r'\binternet\s+banking\b', '', _t, flags=re.IGNORECASE)
-                cat, conf = detect_category_with_confidence(clean_desc(_t)) if transcrito else ('outros', 0.2)
-                desc = 'Gasto por Imagem'
-                fctx = _infer_fields(transcrito, tipo)
-                return [{
-                    "tipo": tipo,
-                    "valor": float(valor),
-                    "categoria": cat,
-                    "descricao": desc,
-                    "moeda": "BRL",
-                    "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-                    "estabelecimento": fctx.get("estabelecimento", ""),
-                    "recebedor": fctx.get("recebedor", ""),
-                    "data_transacao": fctx.get("data_transacao", ""),
-                    "confidence_score": float(conf),
-                    "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
-                }]
-        except:
-            pass
         rb = extrair_informacoes_financeiras(transcrito) or []
         if rb:
             try:
@@ -705,121 +424,16 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     o.setdefault("recebedor", fctx.get("recebedor", ""))
                     o.setdefault("data_transacao", fctx.get("data_transacao", ""))
                     cr = str(o.get("categoria", "outros")).strip().lower()
-                    if cr == 'duvida':
-                        o["categoria"] = 'outros'
+                    if cr in ('duvida', 'outros'):
                         o["pendente_confirmacao"] = True
-                        o["confidence_score"] = float(0.4)
+                        o["confidence_score"] = float(0.6)
+                    else:
+                        o["pendente_confirmacao"] = False
+                        o["confidence_score"] = float(0.9)
                     out_rb.append(o)
                 except:
                     continue
             if out_rb:
                 return out_rb
-        tl = transcrito.lower()
-        import re as _re
-        def _best_valor2(tl: str):
-            lines = [x.strip().lower() for x in (tl or "").splitlines() if str(x).strip()]
-            prox_pix = set()
-            for i, ln in enumerate(lines):
-                if 'pix' in ln:
-                    prox_pix.add(i)
-                    if i > 0:
-                        prox_pix.add(i - 1)
-                    if i + 1 < len(lines):
-                        prox_pix.add(i + 1)
-            pat_money = r'(?:r\$\s*)?(\d{1,3}(?:[.\s\u00a0]\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})'
-            res = []
-            for i, ln in enumerate(lines):
-                if re.search(r'cnpj|cpf', ln, re.IGNORECASE):
-                    continue
-                for m in re.finditer(pat_money, ln, re.IGNORECASE):
-                    try:
-                        raw = m.group(1)
-                        if ',' in raw:
-                            val = float(raw.replace('.', '').replace(',', '.'))
-                        else:
-                            val = float(raw)
-                        score = 0
-                        if 'pix' in ln:
-                            score += 5
-                        if i in prox_pix:
-                            score += 3
-                        if re.search(r'\bvalor\b|\btotal\b|\bpagamento\b|\bpago\b', ln, re.IGNORECASE):
-                            score += 3
-                        if 'r$' in ln:
-                            score += 2
-                        if ',' in raw:
-                            score += 1
-                        res.append((val, score, i))
-                    except:
-                        continue
-            if not res:
-                return None
-            res.sort(key=lambda x: (x[1], x[2]), reverse=True)
-            return res[0][0]
-        best = _best_valor2(tl)
-        if best is None:
+        except:
             return []
-        valor = float(best)
-        tipo = '0'
-        if re.search(r'\b(recebi|recebido|recebimento)\b', tl, re.IGNORECASE) or 'pix recebido' in tl or 'credito na conta' in tl or 'crédito na conta' in tl or 'deposito' in tl or 'depósito' in tl:
-            tipo = '1'
-        tl_san = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', tl, flags=re.IGNORECASE)
-        tl_san = re.sub(r'\binternet\s+banking\b', '', tl_san, flags=re.IGNORECASE)
-        cat, conf = detect_category_with_confidence(clean_desc(tl_san))
-        if tipo == '0' and cat == 'vendas':
-            cat = 'outros'
-        def _nat3(tl, tp, ct):
-            s = tl or ""
-            m = re.search(r'\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
-            if m:
-                return f"{m.group(1)} {m.group(2)}".strip()
-            if tp == '1':
-                if re.search(r'sal[áa]ri', s):
-                    return 'salário'
-                if re.search(r'vend', s):
-                    return 'vendas'
-                if 'pix' in s or 'depósito' in s or 'deposito' in s:
-                    return 'pix recebido'
-                return 'receita'
-            else:
-                if re.search(r'\bpix\b', s, re.IGNORECASE):
-                    return 'pix'
-                if re.search(r'\btransfer\w*\b', s, re.IGNORECASE):
-                    return 'transferência'
-                if re.search(r'\bcart[ãa]o\b|\bcr[eé]dito\b|\bd[ée]bito\b', s, re.IGNORECASE):
-                    return 'cartão'
-                if re.search(r'\bboleto\b', s, re.IGNORECASE):
-                    return 'boleto'
-                if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
-                    return 'mercado'
-                if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
-                    return 'farmácia'
-                if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
-                    return 'restaurante'
-                if re.search(r'\buber\b', s, re.IGNORECASE):
-                    return 'uber'
-                if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
-                    return 'combustível'
-                if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
-                    return 'internet'
-                if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
-                    return 'moradia'
-                return ct or 'outros'
-        base_desc = _nat3(tl, tipo, cat)
-        desc = naturalize_description(tipo, cat, base_desc)
-        fctx = _infer_fields(transcrito, tipo)
-        return [{
-            "tipo": tipo,
-            "valor": float(valor),
-            "categoria": cat,
-            "descricao": desc,
-            "moeda": "BRL",
-            "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-            "estabelecimento": fctx.get("estabelecimento", ""),
-            "recebedor": fctx.get("recebedor", ""),
-            "data_transacao": fctx.get("data_transacao", ""),
-            "confidence_score": float(conf),
-            "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
-        }]
-    except:
-        return []

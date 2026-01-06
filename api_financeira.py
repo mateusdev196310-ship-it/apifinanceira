@@ -5,7 +5,6 @@ import os
 from datetime import datetime, timedelta, timezone
 from flask_cors import CORS
 from app.services.extractor import extrair_informacoes_financeiras
-from app.services.rule_based import parse_text_to_transactions, clean_desc, detect_category, naturalize_description, natural_score
 from audio_processor import audio_processor
 from app.services.database import get_db, salvar_transacao_cliente, firestore, ensure_cliente, build_ref_id, parse_ref_id, recompute_cliente_aggregates
 from app.services.pdf_extractor import extrair_transacoes_de_pdf, extrair_totais_a_pagar_de_pdf
@@ -141,17 +140,14 @@ def processar():
                 tipo_n = str(item.get('tipo')).strip()
                 valor_n = float(item.get('valor', 0))
                 desc_raw = str(item.get('descricao', ''))
-                desc_n = clean_desc(desc_raw)
                 cat_n = str(item.get('categoria', '')).strip().lower()
-                if not cat_n or cat_n == 'outros':
-                    try:
-                        cat_n = detect_category(desc_n or (texto_ctx or ''))
-                    except:
-                        pass
-                desc_final = naturalize_description(tipo_n, cat_n, desc_n)
+                desc_final = (_re.sub(r'\s+', ' ', desc_raw or '').strip())
+                toks = desc_final.split()
+                if len(toks) > 8:
+                    desc_final = ' '.join(toks[:8])
                 k = (tipo_n, valor_n, cat_n)
                 cur = d.get(k)
-                if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+                if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
                     novo = dict(item)
                     novo['descricao'] = desc_final
                     novo['categoria'] = cat_n
@@ -208,45 +204,38 @@ def processar():
         return jsonify({"sucesso": False, "erro": "Mensagem não fornecida"}), 400
     
     texto = data['mensagem']
-    rb = parse_text_to_transactions(texto) or []
-    base = []
-    orig_count = 0
-    if not rb:
-        base = extrair_informacoes_financeiras(texto) or []
+    base = extrair_informacoes_financeiras(texto) or []
+    orig_count = len(base or [])
     def _norm_dedup(items):
         d = {}
         for item in items:
             tipo_n = str(item.get('tipo')).strip()
             valor_n = float(item.get('valor', 0))
             desc_raw = str(item.get('descricao', ''))
-            desc_n = clean_desc(desc_raw)
             cat_n = str(item.get('categoria', '')).strip().lower()
-            if not cat_n or cat_n == 'outros':
-                try:
-                    cat_n = detect_category(desc_n or texto)
-                except:
-                    pass
-            desc_final = naturalize_description(tipo_n, cat_n, desc_n)
+            desc_final = (_re.sub(r'\s+', ' ', desc_raw or '').strip())
+            toks = desc_final.split()
+            if len(toks) > 8:
+                desc_final = ' '.join(toks[:8])
             k = (tipo_n, valor_n, cat_n)
             cur = d.get(k)
-            if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+            if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
                 novo = dict(item)
                 novo['descricao'] = desc_final
                 novo['categoria'] = cat_n
                 d[k] = novo
         return list(d.values())
     ai_dedup = _norm_dedup(base) if base else []
-    rb_dedup = _norm_dedup(rb) if rb else []
-    transacoes = ai_dedup if ai_dedup else rb_dedup
+    transacoes = ai_dedup
     try:
-        src = "gemini" if ai_dedup else ("local-regra" if rb_dedup else "nenhum")
+        src = "gemini" if ai_dedup else "nenhum"
         SOURCE_STATS[src] = SOURCE_STATS.get(src, 0) + 1
         total_stats = sum(SOURCE_STATS.values())
         print(f"[processar] fonte={src} qtd={len(transacoes)} stats={SOURCE_STATS} total={total_stats}")
     except:
         pass
     try:
-        print(f"[processar] ai_dedup={ai_dedup} rb_dedup={rb_dedup} escolhidas={transacoes}")
+        print(f"[processar] ai_dedup={ai_dedup} escolhidas={transacoes}")
     except:
         pass
     try:
@@ -271,23 +260,7 @@ def processar():
             erro_salvar = "Falha ao salvar no Firestore"
     except Exception:
         erro_salvar = "Falha ao salvar no Firestore"
-    normalized = []
-    for item in transacoes:
-        tipo_n = str(item.get('tipo')).strip()
-        valor_n = float(item.get('valor', 0))
-        desc_raw = str(item.get('descricao', ''))
-        desc_n = clean_desc(desc_raw)
-        cat_n = str(item.get('categoria', '')).strip().lower()
-        if not cat_n or cat_n == 'outros':
-            try:
-                cat_n = detect_category(desc_n or texto)
-            except:
-                pass
-        novo = dict(item)
-        novo['descricao'] = naturalize_description(tipo_n, cat_n, desc_n)
-        novo['categoria'] = cat_n
-        normalized.append(novo)
-    transacoes = _norm_dedup(normalized)
+    transacoes = _norm_dedup(transacoes)
     try:
         print(f"[processar] normalized={normalized} final={transacoes}")
     except:
@@ -299,15 +272,15 @@ def processar():
         "total": len(transacoes),
         "arquivo": None,
         "processado_em": _now_sp().isoformat(),
-        "debug": {
-            "ai_count": orig_count,
-            "rb_count": len(rb or []),
-            "version": "ai+rule-v1"
-        },
-        "erro_salvar": erro_salvar,
-        "salvas": [
-            {
-                "ref_id": x.get("ref_id"),
+            "debug": {
+                "ai_count": orig_count,
+                "rb_count": 0,
+                "version": "ai-v2"
+            },
+            "erro_salvar": erro_salvar,
+            "salvas": [
+                {
+                    "ref_id": x.get("ref_id"),
                 "valor": float(x.get("valor", 0) or 0),
                 "tipo": str(x.get("tipo", "")),
                 "categoria": str(x.get("categoria", "")),
@@ -408,8 +381,8 @@ def health_consistency_all():
         return jsonify({"sucesso": False, "erro": str(e)}), 500
     if not texto:
         return jsonify({"sucesso": False, "erro": "Transcrição vazia"}), 200
-    rb = parse_text_to_transactions(texto) or []
-    if not rb:
+    base = extrair_informacoes_financeiras(texto) or []
+    if not base:
         return jsonify({"sucesso": False, "erro": "Nenhuma transação encontrada"}), 200
     def _norm_dedup(items):
         d = {}
@@ -417,27 +390,24 @@ def health_consistency_all():
             tipo_n = str(item.get('tipo')).strip()
             valor_n = float(item.get('valor', 0))
             desc_raw = str(item.get('descricao', ''))
-            desc_n = clean_desc(desc_raw)
             cat_n = str(item.get('categoria', '')).strip().lower()
-            if not cat_n or cat_n == 'outros':
-                try:
-                    cat_n = detect_category(desc_n or texto)
-                except:
-                    pass
             k = (tipo_n, valor_n, cat_n)
             cur = d.get(k)
-            desc_final = naturalize_description(tipo_n, cat_n, desc_n)
-            if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+            desc_final = (_re.sub(r'\s+', ' ', desc_raw or '').strip())
+            toks = desc_final.split()
+            if len(toks) > 8:
+                desc_final = ' '.join(toks[:8])
+            if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
                 novo = dict(item)
                 novo['descricao'] = desc_final
                 novo['categoria'] = cat_n
                 d[k] = novo
         return list(d.values())
-    transacoes = _norm_dedup(rb)
+    transacoes = _norm_dedup(base)
     try:
-        SOURCE_STATS["audio-local"] = SOURCE_STATS.get("audio-local", 0) + 1
+        SOURCE_STATS["gemini"] = SOURCE_STATS.get("gemini", 0) + 1
         total_stats = sum(SOURCE_STATS.values())
-        print(f"[processar_audio] fonte=local-regra qtd={len(transacoes)} stats={SOURCE_STATS} total={total_stats}")
+        print(f"[processar_audio] fonte=gemini qtd={len(transacoes)} stats={SOURCE_STATS} total={total_stats}")
     except:
         pass
     erro_salvar = None

@@ -3,41 +3,31 @@ import json
 from app.services.gemini import get_client, set_cooldown
 from app.constants.categories import CATEGORY_LIST
 from google.genai import types
-from app.services.rule_based import parse_text_to_transactions, naturalize_description, natural_score
+
 def extrair_informacoes_financeiras(texto_usuario):
     cat_list = ", ".join(CATEGORY_LIST)
     prompt = (
-        "ANALISE ESTA MENSAGEM E EXTRAIA TODAS AS INFORMAÇÕES FINANCEIRAS:\n\n"
-        f'Mensagem do usuário: "{texto_usuario}"\n\n'
-        "RETORNE APENAS UM ARRAY JSON COM OBJETOS DESTA ESTRUTURA:\n"
+        "Analise a ENTRADA multimodal do usuário (texto/áudio/imagem/PDF) e extraia TODAS as transações financeiras com categorização e descrição profissionais.\n\n"
+        f'Entrada do usuário: "{texto_usuario}"\n\n'
+        "Retorne SOMENTE um ARRAY JSON com objetos desta estrutura:\n"
         "[\n"
-        "    {\n"
-        '        "tipo": "0" para despesa ou "1" para receita,\n'
-        '        "valor": número decimal com duas casas,\n'
-        f'        "categoria": {cat_list},\n'
-        '        "descricao": "descrição breve",\n'
-        '        "moeda": "BRL"\n'
-        "    }\n"
+        "  {\n"
+        '    "tipo": "0" para despesa ou "1" para receita,\n'
+        '    "valor": número decimal,\n'
+        f'    "categoria": uma das [{cat_list}],\n'
+        '    "descricao": frase breve profissional (3–8 palavras),\n'
+        '    "moeda": "BRL"\n'
+        "  }\n"
         "]\n\n"
-        "REGRAS:\n"
-        "1. Tipo:\n"
-        '   - Despesa (gastei, paguei, comprei, custou, transferi) → "0"\n'
-        '   - Receita (recebi, ganhei, vendi, salário, freela) → "1"\n'
-        '2. Categoria: use apenas as listadas. Se ambígua ou incerta, use "duvida". "vendas" para venda/vendi. "salario" somente com menção explícita a salário/holerite/folha/contracheque.\n'
-        '3. Valor: extraia número decimal com duas casas. Suporta formatos como "1.500", "1,500.00", "477,17", "R$ 50". Converta para 50.00, 477.17 etc.\n'
-        "4. Descrição:\n"
-        '   - Curta (3–6 palavras), clara e objetiva, fiel ao que o usuário disse.\n'
-        '   - Remova números e moeda; não use "por X" (preço vai no campo valor).\n'
-        '   - Complete preposições: use "da/do/das/dos/para" com o objeto correto.\n'
-        "   - Forma nominal:\n"
-        '    • Venda: "Venda de …" (ex.: "Venda de calça", "Venda de peça da moto")\n'
-        '    • Transferência recebida: "Transferência de …" (ex.: "Transferência da prima")\n'
-        '    • Transferência enviada: "Transferência para …" (ex.: "Transferência para a prima")\n'
-        '    • Despesa: "Gastos com …" (ex.: "Gastos com peça da moto", "Gastos com internet")\n'
-        '   - Preserve substantivos principais e nomes próprios/marcas (ex.: "Netflix", "Banco do Brasil"). Evite adjetivos e palavras vazias ("meu", "minha", "uma", "um"), use apenas se necessário para fluência.\n'
-        "5. Múltiplas transações: mensagens podem conter várias; retorne um array com todas.\n"
-        "6. Deduplicação: se houver transações repetidas (mesmo tipo/valor/categoria), mantenha apenas uma com a descrição mais curta e clara.\n"
-        "7. Saída: retorne SOMENTE o ARRAY JSON, sem textos extras.\n\n"
+        "Diretrizes de categorização e descrição:\n"
+        "• Liberdade e contexto total: interprete o conteúdo e defina categoria e descrição conforme o contexto real (texto, áudio, comprovantes em imagem ou PDFs).\n"
+        "• Exemplos de mapeamento: 'feira' → categoria 'alimentacao' com descrição 'Feira'; 'supermercado' → categoria 'alimentacao' com descrição 'Supermercado'.\n"
+        "• Reformule termos informais em nomes profissionais: 'mandei pro cara do uber' → categoria 'transporte', descrição 'Transporte por Aplicativo'.\n"
+        "• Evite 'outros' ao máximo. Use 'duvida' somente quando realmente não houver pistas, e prefira uma categoria lógica quando houver indícios.\n"
+        "• Mantenha padronização de nomes independentemente da modalidade de entrada.\n"
+        "• Não inclua números, moeda ou preços na descrição; complete preposições ('de/da/do/para') corretamente; preserve marcas e nomes próprios.\n"
+        "• Se houver múltiplas transações, retorne todas. Dedup: itens iguais (tipo/valor/categoria) devem aparecer uma vez, com descrição mais curta e clara.\n"
+        "• Saída: SOMENTE o ARRAY JSON, sem texto extra.\n\n"
         "EXEMPLOS:\n"
         '- "gastei 50 no mercado"\n'
         "[\n"
@@ -64,7 +54,7 @@ def extrair_informacoes_financeiras(texto_usuario):
         "  {\n"
         '    "tipo": "1",\n'
         '    "valor": 500.00,\n'
-        '    "categoria": "outros",\n'
+        '    "categoria": "duvida",\n'
         '    "descricao": "Transferência da prima",\n'
         '    "moeda": "BRL"\n'
         "  }\n"
@@ -74,7 +64,7 @@ def extrair_informacoes_financeiras(texto_usuario):
         "  {\n"
         '    "tipo": "1",\n'
         '    "valor": 100.00,\n'
-        '    "categoria": "outros",\n'
+        '    "categoria": "duvida",\n'
         '    "descricao": "Transferência de João",\n'
         '    "moeda": "BRL"\n'
         "  }\n"
@@ -94,7 +84,7 @@ def extrair_informacoes_financeiras(texto_usuario):
         "  {\n"
         '    "tipo": "0",\n'
         '    "valor": 500.00,\n'
-        '    "categoria": "outros",\n'
+        '    "categoria": "duvida",\n'
         '    "descricao": "Transferência para a prima",\n'
         '    "moeda": "BRL"\n'
         "  }\n"
@@ -104,7 +94,7 @@ def extrair_informacoes_financeiras(texto_usuario):
         "  {\n"
         '    "tipo": "0",\n'
         '    "valor": 300.00,\n'
-        '    "categoria": "outros",\n'
+        '    "categoria": "servicos",\n'
         '    "descricao": "Gastos com peça da moto",\n'
         '    "moeda": "BRL"\n'
         "  }\n"
@@ -155,7 +145,7 @@ def extrair_informacoes_financeiras(texto_usuario):
     "tipo": "0",
     "valor": 15.00,
     "categoria": "transporte",
-    "descricao": "uber",
+    "descricao": "Transporte por Aplicativo",
     "moeda": "BRL"
   }
 ]
@@ -214,7 +204,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "1",
     "valor": 200.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Depósito do banco",
     "moeda": "BRL"
   }
@@ -234,7 +224,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "1",
     "valor": 300.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência da tia",
     "moeda": "BRL"
   }
@@ -244,7 +234,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "0",
     "valor": 95.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência para o barbeiro",
     "moeda": "BRL"
   }
@@ -271,7 +261,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "1",
     "valor": 50.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "pix recebido",
     "moeda": "BRL"
   }
@@ -313,7 +303,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "1",
     "valor": 1500.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência do Banco do Brasil",
     "moeda": "BRL"
   }
@@ -323,7 +313,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "0",
     "valor": 250.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência para o Nubank",
     "moeda": "BRL"
   }
@@ -333,7 +323,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "1",
     "valor": 3000000.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "receita",
     "moeda": "BRL"
   }
@@ -343,7 +333,7 @@ def extrair_informacoes_financeiras(texto_usuario):
   {
     "tipo": "1",
     "valor": 2300.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "receita",
     "moeda": "BRL"
   }
@@ -392,48 +382,71 @@ def extrair_informacoes_financeiras(texto_usuario):
     "moeda": "BRL"
   }
 ]
--
- "recebi 1.200 do Itaú"
+- "recebi 1.200 do Itaú"
 [
   {
     "tipo": "1",
     "valor": 1200.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência do Itaú",
     "moeda": "BRL"
   }
 ]
--
- "recebi 800 do Bradesco"
+- "recebi 800 do Bradesco"
 [
   {
     "tipo": "1",
     "valor": 800.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência do Bradesco",
     "moeda": "BRL"
   }
 ]
--
- "transferi 400 para o Santander"
+- "transferi 400 para o Santander"
 [
   {
     "tipo": "0",
     "valor": 400.00,
-    "categoria": "outros",
+    "categoria": "duvida",
     "descricao": "Transferência para o Santander",
     "moeda": "BRL"
   }
 ]
 '''
+    # Exemplos extras específicos para reforço de multimodalidade e termos informais
+    prompt += '''EXEMPLOS ESPECÍFICOS:
+- "mandei pro cara do uber 35"
+[
+  {
+    "tipo": "0",
+    "valor": 35.00,
+    "categoria": "transporte",
+    "descricao": "Transporte por Aplicativo",
+    "moeda": "BRL"
+  }
+]
+- "gastei 120 no supermercado"
+[
+  {
+    "tipo": "0",
+    "valor": 120.00,
+    "categoria": "alimentacao",
+    "descricao": "Supermercado",
+    "moeda": "BRL"
+  }
+]
+- "recebi 250 pix do João pelo serviço de fotos"
+[
+  {
+    "tipo": "1",
+    "valor": 250.00,
+    "categoria": "servicos",
+    "descricao": "Serviço de fotos",
+    "moeda": "BRL"
+  }
+]
+'''
     try:
-        rb = parse_text_to_transactions(texto_usuario)
-        if rb:
-            try:
-                print(f"[extrair_informacoes_financeiras] fonte=local-regra qtd={len(rb)}")
-            except:
-                pass
-            return rb
         client = get_client()
         ai_resultados = []
         if client is not None:
@@ -442,7 +455,7 @@ def extrair_informacoes_financeiras(texto_usuario):
                     model='gemini-2.5-flash',
                     contents=prompt,
                     config=types.GenerateContentConfig(
-                        system_instruction="Você é um extrator financeiro PT-BR. Siga rigorosamente as regras do prompt e retorne somente JSON válido, sem texto extra.",
+                        system_instruction="Você é um classificador financeiro PT-BR multimodal. Obedeça estritamente às diretrizes: categoria específica (evitar 'outros'), descrição profissional concisa e consistente entre texto/áudio/imagem/PDF. Retorne SOMENTE JSON válido.",
                         temperature=0.1,
                         max_output_tokens=512,
                     ),
@@ -462,11 +475,10 @@ def extrair_informacoes_financeiras(texto_usuario):
                             tipo_n = str(item.get('tipo')).strip()
                             cat_n = str(item.get('categoria', '')).strip().lower()
                             desc_raw = str(item.get('descricao', ''))
-                            desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
-                            desc_final = re.sub(r'\s+', ' ', desc_final).strip()
+                            desc_final = re.sub(r'\s+', ' ', desc_raw).strip()
                             toks = desc_final.split()
-                            if len(toks) > 6:
-                                desc_final = ' '.join(toks[:6])
+                            if len(toks) > 8:
+                                desc_final = ' '.join(toks[:8])
                             item['descricao'] = desc_final
                             normalizados.append(item)
                         dedup = {}
@@ -485,11 +497,10 @@ def extrair_informacoes_financeiras(texto_usuario):
                         tipo_n = str(dados_lista.get('tipo')).strip()
                         cat_n = str(dados_lista.get('categoria', '')).strip().lower()
                         desc_raw = str(dados_lista.get('descricao', ''))
-                        desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
-                        desc_final = re.sub(r'\s+', ' ', desc_final).strip()
+                        desc_final = re.sub(r'\s+', ' ', desc_raw).strip()
                         toks = desc_final.split()
-                        if len(toks) > 6:
-                            desc_final = ' '.join(toks[:6])
+                        if len(toks) > 8:
+                            desc_final = ' '.join(toks[:8])
                         dados_lista['descricao'] = desc_final
                         ai_resultados = [dados_lista]
                 except:
@@ -530,4 +541,4 @@ def extrair_informacoes_financeiras(texto_usuario):
             return ai_resultados
         return []
     except Exception:
-        return parse_text_to_transactions(texto_usuario)
+        return []

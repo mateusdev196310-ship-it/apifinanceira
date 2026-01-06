@@ -25,11 +25,12 @@ from app.utils.formatting import (
     wrap_code_block,
 )
 from app.constants.categories import CATEGORY_NAMES, CATEGORY_LIST
-from app.services.rule_based import parse_text_to_transactions, clean_desc, naturalize_description, natural_score, parse_value
 from app.services.image_extractor import extrair_informacoes_da_imagem
 from app.services.database import salvar_transacao_cliente, ensure_cliente, get_db, firestore, get_categoria_memoria, atualizar_memoria_categoria
 from time import time as _now_ts
 from app.services.gemini import is_available as _gemini_ok
+from app.services.gemini import sintetizar_descricao_curta
+from app.services.rule_based import parse_value
 try:
     from zoneinfo import ZoneInfo
 except Exception:
@@ -508,13 +509,6 @@ def _map_text_to_category(texto: str) -> str:
             return best
     except:
         pass
-    try:
-        from app.services.rule_based import detect_category_with_confidence
-        cat, conf = detect_category_with_confidence(texto)
-        if conf >= 0.5:
-            return cat
-    except:
-        pass
     return "outros"
 def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 6):
     try:
@@ -644,7 +638,7 @@ async def _disparar_confirmacoes(update_or_query, context, transacoes, salvas):
                                 if str(it2.get("ref_id") or "") == rid:
                                     it2["categoria"] = cat
                                     try:
-                                        key = _normalize_ascii(clean_desc(str(it2.get("descricao", ""))))
+                                        key = _normalize_ascii(re.sub(r'\s+', ' ', str(it2.get("descricao", ""))).strip())
                                         mem = context.user_data.get("cat_memory", {}) or {}
                                         if key:
                                             mem[key] = cat
@@ -1311,7 +1305,7 @@ async def button_handler(update: Update, context: CallbackContext) -> None:
                 if str(it.get("ref_id") or "") == rid:
                     it["categoria"] = nova
                     try:
-                        key = _normalize_ascii(clean_desc(str(it.get("descricao", ""))))
+                        key = _normalize_ascii(re.sub(r'\s+', ' ', str(it.get("descricao", ""))).strip())
                         mem = context.user_data.get("cat_memory", {}) or {}
                         mem[key] = nova
                         context.user_data["cat_memory"] = mem
@@ -3542,7 +3536,7 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             if str(it.get("ref_id") or "") == rid:
                 it["categoria"] = nova
                 try:
-                    key = _normalize_ascii(clean_desc(str(it.get("descricao", ""))))
+                    key = _normalize_ascii(re.sub(r'\s+', ' ', str(it.get("descricao", ""))).strip())
                     mem = context.user_data.get("cat_memory", {}) or {}
                     mem[key] = nova
                     context.user_data["cat_memory"] = mem
@@ -3694,120 +3688,19 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
     try:
         await _bg_semaphore.acquire()
         salvas_coletadas = []
-        rb_local = parse_text_to_transactions(texto) or []
-        if rb_local:
-            transacoes = rb_local
-            arq = None
-            try:
-                cid = str(update.effective_chat.id)
-                await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                try:
-                    mem = context.user_data.get("cat_memory", {})
-                except:
-                    mem = {}
-                try:
-                    cid = str(update.effective_chat.id)
-                    mem_db = await asyncio.to_thread(get_categoria_memoria, cid)
-                    if isinstance(mem_db, dict) and mem_db:
-                        for k, v in mem_db.items():
-                            if k and v and v not in ("outros", "duvida"):
-                                mem[k] = v
-                    context.user_data["cat_memory"] = mem
-                except:
-                    pass
-                try:
-                    for it in transacoes:
-                        try:
-                            key = _normalize_ascii(clean_desc(str(it.get('descricao', ''))))
-                            mc = mem.get(key)
-                            if mc and mc not in ("outros", "duvida"):
-                                it['categoria'] = mc
-                        except:
-                            pass
-                except:
-                    pass
-                salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
-            except:
-                arq = None
-            try:
-                def _desc_confusa(s):
-                    t = str(s or '').strip()
-                    if not t:
-                        return True
-                    tl = t.lower()
-                    if tl in {'despesa', 'receita'}:
-                        return True
-                    if len(t.split()) < 3:
-                        return True
-                    if re.search(r'(?:\b(?:de|da|do|das|dos|para)\s*)$', tl):
-                        return True
-                    return False
-                baixa_conf = False
-                try:
-                    baixa_conf = any(
-                        (str(it.get('categoria', 'outros')).strip().lower() in ('outros', 'duvida')) or
-                        (float(it.get('confidence_score', 0.0) or 0.0) < 0.95)
-                        for it in transacoes
-                    )
-                except:
-                    baixa_conf = True
-                precisa_ai = any(_desc_confusa(str(it.get('descricao', ''))) for it in transacoes) or baixa_conf
-                if precisa_ai and _gemini_ok():
-                    from app.services.extractor import extrair_informacoes_financeiras
-                    ai_trans = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
-                    try:
-                        ai_idx = {}
-                        for ai in ai_trans or []:
-                            k = (str(ai.get('tipo', '')).strip(), float(ai.get('valor', 0)))
-                            ai_idx[k] = ai
-                        for it in transacoes or []:
-                            try:
-                                k = (str(it.get('tipo', '')).strip(), float(it.get('valor', 0)))
-                                cand = ai_idx.get(k)
-                                if cand and str(cand.get('categoria', 'outros')).strip().lower() not in ('outros', 'duvida'):
-                                    it['categoria'] = str(cand.get('categoria')).strip().lower()
-                                    try:
-                                        conf = float(cand.get('confidence_score', 0.95) or 0.95)
-                                        it['confidence_score'] = conf
-                                        it['pendente_confirmacao'] = False if conf >= 0.95 else True
-                                    except:
-                                        pass
-                                    try:
-                                        it['descricao'] = naturalize_description(str(it.get('tipo', '')), str(it.get('categoria', '')), clean_desc(str(it.get('descricao', ''))))
-                                    except:
-                                        pass
-                            except:
-                                pass
-                    except:
-                        pass
-            except:
-                pass
-        else:
+        transacoes = []
+        arq = None
+        try:
+            from app.services.extractor import extrair_informacoes_financeiras
+            transacoes = (await asyncio.to_thread(extrair_informacoes_financeiras, texto)) if _gemini_ok() else []
+        except:
             transacoes = []
-            data = None
-            from app.services.finance_api import processar_mensagem
-            data = await asyncio.to_thread(processar_mensagem, texto, timeout=4, cliente_id=str(update.effective_chat.id))
-            if data and data.get("sucesso"):
-                transacoes_api = data.get("transacoes", [])
-                transacoes = transacoes_api if transacoes_api else []
-                arq = data.get("arquivo")
-                try:
-                    salvas_coletadas = data.get("salvas", []) or []
-                except:
-                    salvas_coletadas = []
-            else:
-                try:
-                    from app.services.extractor import extrair_informacoes_financeiras
-                    transacoes = (await asyncio.to_thread(extrair_informacoes_financeiras, texto)) if _gemini_ok() else []
-                except:
-                    transacoes = []
-                arq = None
-                try:
-                    cid = str(update.effective_chat.id)
-                    await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
-                    salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
-                except:
-                    arq = None
+        try:
+            cid = str(update.effective_chat.id)
+            await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
+            salvas_coletadas = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot")
+        except:
+            arq = None
         try:
             baixa_conf = any(
                 (str(it.get('categoria', 'outros')).strip().lower() in ('outros', 'duvida')) or
@@ -3837,7 +3730,11 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
                             except:
                                 pass
                             try:
-                                it['descricao'] = naturalize_description(str(it.get('tipo', '')), str(it.get('categoria', '')), clean_desc(str(it.get('descricao', ''))))
+                                raw_d = str(it.get('descricao', ''))
+                                cat_d = str(it.get('categoria', ''))
+                                ai_d = sintetizar_descricao_curta(raw_d, categoria=cat_d)
+                                if ai_d:
+                                    it['descricao'] = ai_d
                             except:
                                 pass
                     except:
@@ -3849,12 +3746,14 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
             tipo_n = str(item.get('tipo')).strip()
             valor_n = float(item.get('valor', 0))
             desc_raw = str(item.get('descricao', ''))
-            desc_n = clean_desc(desc_raw)
             cat_n = str(item.get('categoria', '')).strip().lower()
-            desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_n)
+            desc_final = re.sub(r'\s+', ' ', desc_raw or '').strip()
+            toks = desc_final.split()
+            if len(toks) > 8:
+                desc_final = ' '.join(toks[:8])
             k = (tipo_n, valor_n, cat_n)
             cur = dedup.get(k)
-            if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+            if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
                 novo = dict(item)
                 novo['descricao'] = desc_final
                 novo['categoria'] = cat_n
@@ -4121,12 +4020,17 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
                 tipo_n = str(item.get('tipo')).strip()
                 valor_n = float(item.get('valor', 0))
                 desc_raw = str(item.get('descricao', ''))
-                desc_n = clean_desc(desc_raw)
                 cat_n = str(item.get('categoria', '')).strip().lower()
-                desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_n)
+                desc_final = re.sub(r'\s+', ' ', desc_raw or '').strip()
+                try:
+                    ai_d = sintetizar_descricao_curta(desc_final, categoria=cat_n)
+                    if ai_d:
+                        desc_final = ai_d
+                except:
+                    pass
                 k = (tipo_n, valor_n, cat_n)
                 cur = dedup.get(k)
-                if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+                if cur is None or len(desc_final) <= len(str(cur.get('descricao', ''))):
                     novo = dict(item)
                     novo['descricao'] = desc_final
                     novo['categoria'] = cat_n
@@ -4155,7 +4059,7 @@ async def processar_mensagem_imagem(update: Update, context: CallbackContext):
                 idx_u[k] = s
             for t in transacoes:
                 try:
-                    key = _normalize_ascii(clean_desc(str(t.get("descricao", ""))))
+                    key = _normalize_ascii(re.sub(r'\s+', ' ', str(t.get("descricao", ""))).strip())
                     mc = mem.get(key)
                     if mc and mc not in ("outros", "duvida"):
                         tp_txt = "saida" if str(t.get("tipo")).strip() in ("0", "despesa", "saida") else "entrada"
@@ -4480,12 +4384,17 @@ async def processar_mensagem_documento(update: Update, context: CallbackContext)
                 tipo_n = str(item.get('tipo')).strip()
                 valor_n = float(item.get('valor', 0))
                 desc_raw = str(item.get('descricao', ''))
-                desc_n = clean_desc(desc_raw)
                 cat_n = str(item.get('categoria', '')).strip().lower()
-                desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_n)
+                desc_final = re.sub(r'\s+', ' ', desc_raw or '').strip()
+                try:
+                    ai_d = sintetizar_descricao_curta(desc_final, categoria=cat_n)
+                    if ai_d:
+                        desc_final = ai_d
+                except:
+                    pass
                 k = (tipo_n, valor_n, cat_n)
                 cur = dedup.get(k)
-                if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+                if cur is None or len(desc_final) <= len(str(cur.get('descricao', ''))):
                     novo = dict(item)
                     novo['descricao'] = desc_final
                     novo['categoria'] = cat_n
@@ -4632,8 +4541,9 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
             except:
                 salvas_voz = []
         else:
-            transacoes = parse_text_to_transactions(texto)
             try:
+                from app.services.extractor import extrair_informacoes_financeiras
+                transacoes = (await asyncio.to_thread(extrair_informacoes_financeiras, texto)) if _gemini_ok() else []
                 cid = str(update.effective_chat.id)
                 await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
                 salvas_voz = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
@@ -4669,12 +4579,14 @@ async def processar_mensagem_voz(update: Update, context: CallbackContext):
                     tipo_n = str(item.get('tipo')).strip()
                     valor_n = float(item.get('valor', 0))
                     desc_raw = str(item.get('descricao', ''))
-                    desc_n = clean_desc(desc_raw)
                     cat_n = str(item.get('categoria', '')).strip().lower()
-                    desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_n)
+                    desc_final = re.sub(r'\s+', ' ', desc_raw or '').strip()
+                    toks = desc_final.split()
+                    if len(toks) > 8:
+                        desc_final = ' '.join(toks[:8])
                     k = (tipo_n, valor_n, cat_n)
                     cur = dedup.get(k)
-                    if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+                    if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
                         novo = dict(item)
                         novo['descricao'] = desc_final
                         novo['categoria'] = cat_n
@@ -4860,8 +4772,9 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
             except:
                 salvas_audio = []
         else:
-            transacoes = parse_text_to_transactions(texto)
             try:
+                from app.services.extractor import extrair_informacoes_financeiras
+                transacoes = await asyncio.to_thread(extrair_informacoes_financeiras, texto) or []
                 cid = str(update.effective_chat.id)
                 await asyncio.to_thread(ensure_cliente, cid, nome=get_cliente_nome(update), username=get_cliente_username(update))
                 salvas_audio = await asyncio.to_thread(salvar_transacao_cliente, transacoes, cliente_id=cid, origem="bot-audio")
@@ -4892,22 +4805,24 @@ async def processar_mensagem_audio(update: Update, context: CallbackContext):
                     from app.services.extractor import extrair_informacoes_financeiras
                     ai_trans = extrair_informacoes_financeiras(texto) or []
                     transacoes = (transacoes or []) + ai_trans
-                dedup = {}
-                for item in transacoes:
-                    tipo_n = str(item.get('tipo')).strip()
-                    valor_n = float(item.get('valor', 0))
-                    desc_raw = str(item.get('descricao', ''))
-                    desc_n = clean_desc(desc_raw)
-                    cat_n = str(item.get('categoria', '')).strip().lower()
-                    desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_n)
-                    k = (tipo_n, valor_n, cat_n)
-                    cur = dedup.get(k)
-                    if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
-                        novo = dict(item)
-                        novo['descricao'] = desc_final
-                        novo['categoria'] = cat_n
-                        dedup[k] = novo
-                transacoes = list(dedup.values())
+                    dedup = {}
+                    for item in transacoes:
+                        tipo_n = str(item.get('tipo')).strip()
+                        valor_n = float(item.get('valor', 0))
+                        desc_raw = str(item.get('descricao', ''))
+                        cat_n = str(item.get('categoria', '')).strip().lower()
+                        desc_final = re.sub(r'\s+', ' ', desc_raw or '').strip()
+                        toks = desc_final.split()
+                        if len(toks) > 8:
+                            desc_final = ' '.join(toks[:8])
+                        k = (tipo_n, valor_n, cat_n)
+                        cur = dedup.get(k)
+                        if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
+                            novo = dict(item)
+                            novo['descricao'] = desc_final
+                            novo['categoria'] = cat_n
+                            dedup[k] = novo
+                    transacoes = list(dedup.values())
             except:
                 pass
         if not transacoes:
