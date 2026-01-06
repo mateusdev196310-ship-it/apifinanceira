@@ -2117,113 +2117,89 @@ async def categorias_mes(query, context):
     try:
         qs = build_cliente_query_params(query)
         cid = get_cliente_id(query)
-        geral_url = f"{API_URL}/saldo/atual?{qs}"
-        extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=2000&{qs}"
-        try:
-            geral_api, extrato_api = await asyncio.gather(
-                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
-                _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}:rebuild", ttl=10, timeout=6),
-            )
-        except:
-            geral_api = {}
-            extrato_api = {}
-        transacoes = extrato_api.get("matches", []) if extrato_api.get("sucesso") else []
         categorias_despesas = {}
         categorias_receitas = {}
-        for t in transacoes or []:
-            if t.get('estornado'):
-                continue
-            tp_raw = str(t.get('tipo', '')).strip().lower()
-            v = float(t.get('valor', 0) or 0)
-            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
-            is_despesa = tp_raw in ('0', 'despesa', 'saida')
-            is_receita = tp_raw in ('1', 'receita', 'entrada')
-            if is_despesa:
-                categorias_despesas[cat] = float(categorias_despesas.get(cat, 0.0) or 0.0) + v
-                tot_despesas += v
-            elif is_receita:
-                categorias_receitas[cat] = float(categorias_receitas.get(cat, 0.0) or 0.0) + v
-                tot_receitas += v
+        tot_despesas = 0.0
+        tot_receitas = 0.0
+        saldo_mes = 0.0
+        try:
+            db = get_db()
+            root = db.collection('clientes').document(str(cid))
+            mm = root.collection('meses').document(mkey).get().to_dict() or {}
+        except:
+            mm = {}
+        if mm:
+            try:
+                categorias_despesas = dict(mm.get("categorias_saida", {}) or {})
+                categorias_receitas = dict(mm.get("categorias_entrada", {}) or {})
+            except:
+                categorias_despesas = {}
+                categorias_receitas = {}
+            try:
+                tot_despesas = float(mm.get("total_saida", 0) or 0)
+                tot_receitas = float(mm.get("total_entrada", 0) or 0)
+                saldo_mes = float(mm.get("saldo_mes", (tot_receitas - tot_despesas + float(mm.get('total_ajuste', 0) or 0))) or (tot_receitas - tot_despesas + float(mm.get('total_ajuste', 0) or 0)))
+            except:
+                tot_despesas = sum(float(v or 0) for v in dict(mm.get("categorias_saida", {}) or {}).values())
+                tot_receitas = sum(float(v or 0) for v in dict(mm.get("categorias_entrada", {}) or {}).values())
+                saldo_mes = tot_receitas - tot_despesas
+        if not mm or ((not categorias_despesas) and (not categorias_receitas) and (tot_despesas <= 0 and tot_receitas <= 0)):
+            try:
+                cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
+                cat_api = await _req_json_cached_async(cat_group_url, f"catgrp:{cid}:{mkey}", ttl=10, timeout=5)
+            except:
+                cat_api = {}
+            if cat_api.get("sucesso") and isinstance(cat_api.get("categorias"), dict):
+                try:
+                    mapa = dict(cat_api.get("categorias") or {}) or {}
+                    categorias_despesas = dict((mapa.get("despesas") or {}) or {})
+                    categorias_receitas = dict((mapa.get("receitas") or {}) or {})
+                except:
+                    categorias_despesas = {}
+                    categorias_receitas = {}
+                try:
+                    tot = dict(cat_api.get("total") or {}) or {}
+                    tot_despesas = float(tot.get("despesas", 0) or 0)
+                    tot_receitas = float(tot.get("receitas", 0) or 0)
+                    saldo_mes = float(tot.get("saldo", (tot_receitas - tot_despesas)) or (tot_receitas - tot_despesas))
+                except:
+                    saldo_mes = tot_receitas - tot_despesas
+        categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
+        categorias_receitas = {k: float(v or 0) for k, v in (categorias_receitas or {}).items() if float(v or 0) > 0}
         resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n"
         resposta += f"📅 {data_str}\n\n"
-        categorias_despesas = {k: float(v or 0) for k, v in categorias_despesas.items() if float(v or 0) > 0}
-        categorias_receitas = {k: float(v or 0) for k, v in categorias_receitas.items() if float(v or 0) > 0}
-        try:
-            if tot_despesas <= 0:
-                tot_despesas = sum(float(v or 0) for v in categorias_despesas.values())
-            if tot_receitas <= 0:
-                tot_receitas = sum(float(v or 0) for v in categorias_receitas.values())
-        except:
-            pass
-        try:
-            if (tot_despesas <= 0 and tot_receitas <= 0) and extrato_api.get("sucesso"):
-                t_all = extrato_api.get("total") or {}
-                if isinstance(t_all, dict):
-                    td = float(t_all.get("despesas", 0) or 0)
-                    tr = float(t_all.get("receitas", 0) or 0)
-                    if td > 0 or tr > 0:
-                        tot_despesas = td
-                        tot_receitas = tr
-                else:
-                    td = float(extrato_api.get("total_saida_categoria", 0) or 0)
-                    tr = float(extrato_api.get("total_entrada_categoria", 0) or 0)
-                    if td > 0 or tr > 0:
-                        tot_despesas = td
-                        tot_receitas = tr
-        except:
-            pass
-        try:
-            total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
-            tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}:aj", ttl=12, timeout=4)
-            if tm_api.get("sucesso"):
-                tot_all = tm_api.get("total", {}) or {}
-                tot_ajustes = float(tot_all.get("ajustes", 0) or 0)
+        if not categorias_despesas and not categorias_receitas and (tot_despesas <= 0 and tot_receitas <= 0):
+            err_msg = "Nenhum dado encontrado para este mês."
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes")],
+                [InlineKeyboardButton("🏠 MENU", callback_data="menu")],
+            ])
+            if hasattr(query, 'edit_message_text'):
+                await query.edit_message_text(err_msg, parse_mode='Markdown', reply_markup=kb)
+            elif processing_msg:
+                await context.bot.edit_message_text(chat_id=processing_msg.chat_id, message_id=processing_msg.message_id, text=err_msg, parse_mode='Markdown', reply_markup=kb)
             else:
-                tot_ajustes = 0.0
-        except:
-            tot_ajustes = 0.0
+                await query.message.reply_text(err_msg, parse_mode='Markdown', reply_markup=kb)
+            return
         desp_sorted = sorted(categorias_despesas.items(), key=lambda x: -x[1])
         rec_sorted = sorted(categorias_receitas.items(), key=lambda x: -x[1])
-        # Se ainda vazio, tenta fallback mínimo via /categorias/mes (apenas despesas líquidas)
-        if len(desp_sorted) == 0 and len(rec_sorted) == 0:
-            try:
-                catmes_url = f"{API_URL}/categorias/mes?mes={mkey}&{qs}"
-                catmes_api = await _req_json_cached_async(catmes_url, f"catmes:{cid}:{mkey}:fallback", ttl=8, timeout=5)
-                if catmes_api.get("sucesso"):
-                    for k, v in dict(catmes_api.get("categorias") or {}).items():
-                        val = float(v or 0)
-                        if val > 0:
-                            categorias_despesas[k] = val
-                    desp_sorted = sorted(categorias_despesas.items(), key=lambda x: -x[1])
-                    tot_despesas = sum(float(v or 0) for v in categorias_despesas.values())
-            except:
-                pass
         largura = 28
         tabela = ""
         tabela += "DESPESAS\n"
         tabela += ("-" * 3) + "\n"
         for k, v in desp_sorted:
-            label = CATEGORY_NAMES.get(k, k)
+            label = CATEGORY_NAMES.get(k, k).upper()
             linha = criar_linha_tabela(f"{label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
             tabela += f"{linha}\n"
         tabela += "\nRECEITAS\n"
         tabela += ("-" * 3) + "\n"
         for k, v in rec_sorted:
-            label = CATEGORY_NAMES.get(k, k)
+            label = CATEGORY_NAMES.get(k, k).upper()
             linha = criar_linha_tabela(f"{label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
             tabela += f"{linha}\n"
-        try:
-            saldo_mes = tot_receitas - tot_despesas + float(tot_ajustes or 0)
-        except:
-            saldo_mes = tot_receitas - tot_despesas
         linha_saldo = criar_linha_tabela("SALDO DO MÊS:", formatar_moeda(saldo_mes, negrito=False), True, "", largura=largura)
         tabela += f"\n{linha_saldo}"
         resposta += wrap_code_block(tabela) + "\n"
-        try:
-            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
-            saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
-        except:
-            saldo_geral = obter_saldo_geral(get_cliente_id(query))
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⬇️ Expandir detalhes", callback_data="catmes_expand")],
             [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes")],
