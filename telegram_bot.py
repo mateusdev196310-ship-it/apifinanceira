@@ -2166,8 +2166,7 @@ async def categorias_mes(query, context):
                 except:
                     mapa_desp = {k: float(v or 0) for k, v in mapa_desp.items() if float(v or 0) > 0}
                 raw_rec = dict(cats.get("receitas") or {})
-                income_keys = {"salario", "vendas", "outros", "receita", "pix recebido"}
-                mapa_rec = {k: float(raw_rec.get(k, 0) or 0) for k in raw_rec.keys() if k in income_keys and float(raw_rec.get(k, 0) or 0) > 0}
+                mapa_rec = {k: float(raw_rec.get(k, 0) or 0) for k in raw_rec.keys() if float(raw_rec.get(k, 0) or 0) > 0}
             except:
                 mapa_desp = {}
                 mapa_rec = {}
@@ -2218,13 +2217,12 @@ async def categorias_mes(query, context):
                         mapa_desp[k] = dd
                     if rr > 0:
                         mapa_rec[k] = rr
-                income_keys = {"salario", "vendas", "outros", "receita", "pix recebido"}
-                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
+                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
             except:
                 pass
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        if len(desp_sorted) == 0 and len(rec_sorted) == 0:
+        if len(desp_sorted) == 0 or len(rec_sorted) == 0:
             try:
                 extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=1000&{qs}"
                 extrato_api = await _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}:all", ttl=10, timeout=5)
@@ -2240,11 +2238,12 @@ async def categorias_mes(query, context):
                     cat = str(t.get("categoria", "outros") or "outros").strip().lower()
                     val = float(t.get("valor", 0) or 0)
                     if tp == "saida" and val > 0:
-                        mapa_desp[cat] = float(mapa_desp.get(cat, 0) or 0) + val
+                        if cat not in mapa_desp:
+                            mapa_desp[cat] = val
                     elif tp == "entrada" and val > 0:
-                        mapa_rec[cat] = float(mapa_rec.get(cat, 0) or 0) + val
-                income_keys = {"salario", "vendas", "outros", "receita", "pix recebido"}
-                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
+                        if cat not in mapa_rec:
+                            mapa_rec[cat] = val
+                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
                 tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
                 tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
             except:
@@ -2267,13 +2266,9 @@ async def categorias_mes(query, context):
             linha = criar_linha_tabela(f"{label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
             tabela += f"{linha}\n"
         try:
-            tot_obj = (cat_api.get("total") or {}) if cat_api.get("sucesso") else {}
-        except:
-            tot_obj = {}
-        try:
-            saldo_mes = float(tot_obj.get("saldo")) if tot_obj.get("saldo") is not None else (tot_receitas - tot_despesas + float(tot_ajustes or 0))
-        except:
             saldo_mes = tot_receitas - tot_despesas + float(tot_ajustes or 0)
+        except:
+            saldo_mes = tot_receitas - tot_despesas
         linha_saldo = criar_linha_tabela("SALDO DO MÊS:", formatar_moeda(saldo_mes, negrito=False), True, "", largura=largura)
         tabela += f"\n{linha_saldo}"
         resposta += wrap_code_block(tabela) + "\n"
