@@ -2131,11 +2131,15 @@ async def categorias_mes(query, context):
         grupos = {}
         for t in transacoes or []:
             tp_raw = str(t.get('tipo', '')).strip().lower()
-            if tp_raw not in ('saida', 'entrada'):
+            if tp_raw in ('0', 'despesa', 'saida'):
+                tp_use = 'saida'
+            elif tp_raw in ('1', 'receita', 'entrada'):
+                tp_use = 'entrada'
+            else:
                 continue
             cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
             grupos.setdefault(cat, []).append({
-                "tipo": tp_raw,
+                "tipo": tp_use,
                 "valor": float(t.get('valor', 0) or 0),
                 "descricao": str(t.get('descricao', '') or '')
             })
@@ -2162,6 +2166,23 @@ async def categorias_mes(query, context):
             mapa_rec = {}
         tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
         tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
+        try:
+            if (tot_despesas <= 0 and tot_receitas <= 0) and extrato_api.get("sucesso"):
+                t_all = extrato_api.get("total") or {}
+                if isinstance(t_all, dict):
+                    td = float(t_all.get("despesas", 0) or 0)
+                    tr = float(t_all.get("receitas", 0) or 0)
+                    if td > 0 or tr > 0:
+                        tot_despesas = td
+                        tot_receitas = tr
+                else:
+                    td = float(extrato_api.get("total_saida_categoria", 0) or 0)
+                    tr = float(extrato_api.get("total_entrada_categoria", 0) or 0)
+                    if td > 0 or tr > 0:
+                        tot_despesas = td
+                        tot_receitas = tr
+        except:
+            pass
         try:
             total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
             tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}:aj", ttl=12, timeout=4)
