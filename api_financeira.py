@@ -369,11 +369,20 @@ def health_consistency_all():
             except:
                 sg = {}
             try:
-                cm = c.get(f"/categorias/mes?cliente_id={cid}").get_json() or {}
+                cg = c.get(f"/saldo/atual?cliente_id={cid}&mes={_month_key_sp()}&group_by=categoria").get_json() or {}
             except:
-                cm = {}
-            cats = sorted([(k, float(v or 0)) for k, v in dict(cm.get('categorias', {}) or {}).items()], key=lambda x: x[1], reverse=True)
-            cats_est = sorted([(k, float(v or 0)) for k, v in dict(cm.get('categorias_estorno', {}) or {}).items()], key=lambda x: x[1], reverse=True)
+                cg = {}
+            try:
+                categorias_map = dict(((cg.get('categorias') or {}).get('despesas')) or {})
+                estornos_map = dict(((cg.get('categorias') or {}).get('estornos')) or {})
+            except:
+                categorias_map = {}
+                estornos_map = {}
+            keys = set(list(categorias_map.keys()) + list(estornos_map.keys()))
+            net = {k: float(categorias_map.get(k, 0) or 0) - float(estornos_map.get(k, 0) or 0) for k in keys}
+            net = {k: v for k, v in net.items() if float(v or 0) > 0}
+            cats = sorted([(k, float(v or 0)) for k, v in net.items()], key=lambda x: x[1], reverse=True)
+            cats_est = sorted([(k, float(v or 0)) for k, v in estornos_map.items()], key=lambda x: x[1], reverse=True)
             out.append({
                 "cliente_id": str(cid),
                 "nome": str(nome),
@@ -390,8 +399,8 @@ def health_consistency_all():
                 "categorias_mes": {
                     "top_despesas": cats[:5],
                     "top_estornos": cats_est[:5],
-                    "total_despesas": cm.get("total_despesas"),
-                    "total_estornos": cm.get("total_estornos"),
+                    "total_despesas": float(sum(v for _, v in cats)),
+                    "total_estornos": float(sum(v for _, v in cats_est)),
                 }
             })
         return jsonify({"sucesso": True, "clientes": out})
@@ -1669,217 +1678,6 @@ def total_mes():
     except Exception as e:
         return jsonify({"sucesso": False, "erro": str(e)}), 500
 
-@app.route('/categorias/mes', methods=['GET'])
-def categorias_mes():
-    mes_qs = request.args.get("mes")
-    mes_atual = mes_qs or _month_key_sp()
-    categorias = {}
-    total_despesas = 0
-    categorias_estorno = {}
-    total_estornos = 0
-    
-    try:
-        db = get_db()
-        cliente_id = str(request.args.get("cliente_id") or "default")
-        cliente_nome = request.args.get("cliente_nome")
-        cliente_username = request.args.get("username")
-        try:
-            ensure_cliente(cliente_id, nome=cliente_nome, username=cliente_username)
-        except:
-            pass
-        mdoc = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual).get()
-        mm = mdoc.to_dict() or {}
-        categorias_map = dict(mm.get("categorias_saida", {}) or {})
-        categorias_est_map = dict(mm.get("categorias_estorno", {}) or {})
-        categorias = {k: float(v or 0) for k, v in categorias_map.items() if float(v or 0) > 0}
-        categorias_estorno = {k: float(v or 0) for k, v in categorias_est_map.items() if float(v or 0) > 0}
-        mm_total_saida = float(mm.get("total_saida", 0) or 0)
-        sum_cat_exp = sum(float(v or 0) for v in categorias.values())
-        sum_cat_est = sum(float(v or 0) for v in categorias_estorno.values())
-        recalc = False
-        try:
-            if (not categorias and not categorias_estorno) or (abs(sum_cat_exp - mm_total_saida) > 1e-6):
-                recalc = True
-        except:
-            recalc = True
-        if recalc:
-            ano, mes = mes_atual.split("-")
-            dt_ini = f"{ano}-{mes}-01"
-            if mes == "12":
-                dt_fim = f"{int(ano)+1}-01-01"
-            else:
-                dt_fim = f"{ano}-{int(mes)+1:02d}-01"
-            root = db.collection('clientes').document(cliente_id)
-            cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-            end = datetime.strptime(dt_fim, "%Y-%m-%d")
-            categorias = {}
-            categorias_estorno = {}
-            while cur < end:
-                dkey = cur.strftime("%Y-%m-%d")
-                try:
-                    dd = root.collection('dias').document(dkey).get().to_dict() or {}
-                except:
-                    dd = {}
-                try:
-                    for k, v in dict(dd.get("categorias_saida", {}) or {}).items():
-                        categorias[k] = float(categorias.get(k, 0) or 0) + float(v or 0)
-                    for k, v in dict(dd.get("categorias_estorno", {}) or {}).items():
-                        categorias_estorno[k] = float(categorias_estorno.get(k, 0) or 0) + float(v or 0)
-                except:
-                    pass
-                cur = cur + timedelta(days=1)
-            if not categorias and not categorias_estorno:
-                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                end = datetime.strptime(dt_fim, "%Y-%m-%d")
-                while cur < end:
-                    dkey = cur.strftime("%Y-%m-%d")
-                    try:
-                        items = root.collection('transacoes').document(dkey).collection('items').stream()
-                    except:
-                        items = []
-                    for it in items:
-                        t = it.to_dict() or {}
-                        tp_raw = str(t.get('tipo', '')).strip().lower()
-                        val = float(t.get('valor', 0) or 0)
-                        cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
-                        if tp_raw in ('0', 'despesa', 'saida'):
-                            try:
-                                categorias[cat] = float(categorias.get(cat, 0) or 0) + float(val or 0)
-                            except:
-                                pass
-                        elif tp_raw in ('estorno',):
-                            try:
-                                categorias_estorno[cat] = float(categorias_estorno.get(cat, 0) or 0) + float(abs(val) or 0)
-                            except:
-                                pass
-                            try:
-                                ref_id = str(t.get('referencia_id') or '')
-                                dr_ref, did_ref = parse_ref_id(ref_id)
-                                if dr_ref and did_ref:
-                                    odoc = root.collection('transacoes').document(dr_ref).collection('items').document(did_ref).get()
-                                    o = odoc.to_dict() or {}
-                                    otp_raw = str(o.get('tipo', '')).strip().lower()
-                                    if otp_raw in ('0', 'despesa', 'saida'):
-                                        oc = str(o.get('categoria', 'outros') or 'outros').strip().lower()
-                                        categorias[oc] = float(categorias.get(oc, 0) or 0) - float(abs(val) or 0)
-                            except:
-                                pass
-                    cur = cur + timedelta(days=1)
-            if not categorias and not categorias_estorno:
-                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                end = datetime.strptime(dt_fim, "%Y-%m-%d")
-                while cur < end:
-                    dkey = cur.strftime("%Y-%m-%d")
-                    try:
-                        items = list(root.collection('transacoes').document(dkey).collection('items').stream())
-                    except:
-                        items = []
-                    try:
-                        tops = list(root.collection('transacoes').where('data_referencia', '==', dkey).stream())
-                    except:
-                        tops = []
-                    idx = {}
-                    for it in items:
-                        o = it.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if idx.get(k):
-                            continue
-                        idx[k] = 1
-                        tp_raw = str(o.get('tipo', '')).strip().lower()
-                        cat = str(o.get('categoria', 'outros') or 'outros').strip().lower()
-                        val = float(o.get('valor', 0) or 0)
-                        if tp_raw in ('0', 'despesa', 'saida'):
-                            try:
-                                categorias[cat] = float(categorias.get(cat, 0) or 0) + float(val or 0)
-                            except:
-                                pass
-                        elif tp_raw in ('estorno',):
-                            try:
-                                categorias_estorno[cat] = float(categorias_estorno.get(cat, 0) or 0) + float(abs(val) or 0)
-                            except:
-                                pass
-                    for it in tops:
-                        o = it.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if idx.get(k):
-                            continue
-                        idx[k] = 1
-                        tp_raw = str(o.get('tipo', '')).strip().lower()
-                        cat = str(o.get('categoria', 'outros') or 'outros').strip().lower()
-                        val = float(o.get('valor', 0) or 0)
-                        if tp_raw in ('0', 'despesa', 'saida'):
-                            try:
-                                categorias[cat] = float(categorias.get(cat, 0) or 0) + float(val or 0)
-                            except:
-                                pass
-                        elif tp_raw in ('estorno',):
-                            try:
-                                categorias_estorno[cat] = float(categorias_estorno.get(cat, 0) or 0) + float(abs(val) or 0)
-                            except:
-                                pass
-                        cur = cur + timedelta(days=1)
-                try:
-                    mdoc_set = root.collection('meses').document(mes_atual)
-                    mdoc_set.set({
-                        "categorias_saida": {k: float(v or 0) for k, v in categorias.items()},
-                        "categorias_estorno": {k: float(v or 0) for k, v in categorias_estorno.items()},
-                        "atualizado_em": firestore.SERVER_TIMESTAMP,
-                    }, merge=True)
-                except:
-                    pass
-            if not categorias and not categorias_estorno:
-                try:
-                    todos = list(root.collection('transacoes').stream())
-                except:
-                    todos = []
-                for it in todos:
-                    o = it.to_dict() or {}
-                    dr = str(o.get('data_referencia', '') or '')
-                    if not dr.startswith(mes_atual + "-"):
-                        continue
-                    if bool(o.get('estornado', False)):
-                        continue
-                    tp_raw = str(o.get('tipo', '')).strip().lower()
-                    cat = str(o.get('categoria', 'outros') or 'outros').strip().lower()
-                    val = float(o.get('valor', 0) or 0)
-                    if tp_raw in ('0', 'despesa', 'saida'):
-                        try:
-                            categorias[cat] = float(categorias.get(cat, 0) or 0) + float(val or 0)
-                        except:
-                            pass
-                    elif tp_raw in ('estorno',):
-                        try:
-                            categorias_estorno[cat] = float(categorias_estorno.get(cat, 0) or 0) + float(abs(val) or 0)
-                        except:
-                            pass
-                try:
-                    mdoc_set2 = root.collection('meses').document(mes_atual)
-                    mdoc_set2.set({
-                        "categorias_saida": {k: float(v or 0) for k, v in categorias.items()},
-                        "categorias_estorno": {k: float(v or 0) for k, v in categorias_estorno.items()},
-                        "atualizado_em": firestore.SERVER_TIMESTAMP,
-                    }, merge=True)
-                except:
-                    pass
-        try:
-            categorias = {k: float(v or 0) - float(categorias_estorno.get(k, 0) or 0) for k, v in categorias.items()}
-            categorias = {k: float(v or 0) for k, v in categorias.items() if float(v or 0) > 0}
-        except:
-            pass
-        total_despesas = sum(float(v or 0) for v in categorias.values())
-        total_estornos = sum(float(v or 0) for v in categorias_estorno.values())
-        
-        return jsonify({
-            "sucesso": True,
-            "mes": mes_atual,
-            "categorias": {k: v for k, v in categorias.items() if v > 0},
-            "categorias_estorno": {k: v for k, v in categorias_estorno.items() if v > 0},
-            "total_despesas": total_despesas,
-            "total_estornos": total_estornos
-        })
-        
-    except Exception as e:
-        return jsonify({"sucesso": False, "erro": str(e)}), 500
 
 @app.route('/total/semana', methods=['GET'])
 def total_semana():
@@ -2625,7 +2423,6 @@ if __name__ == '__main__':
     print("   GET  /total/mes - Totais do mês")
     print("   GET  /total/semana - Totais da semana")
     print("   GET  /total/geral - Totais gerais (todas transações)")
-    print("   GET  /categorias/mes - Gastos por categoria")
     print("   GET  /health - Status da API")
     print(f"\n🔗 URL: http://{API_HOST}:{API_PORT}")
     app.run(debug=True, host=API_HOST, port=API_PORT, use_reloader=False)
