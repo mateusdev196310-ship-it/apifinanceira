@@ -2146,6 +2146,11 @@ async def categorias_mes(query, context):
             except:
                 categorias_despesas = {}
             try:
+                # Receitas diretas do agregado
+                categorias_receitas = dict(mm.get("categorias_entrada", {}) or {})
+            except:
+                categorias_receitas = {}
+            try:
                 tot_despesas = float(mm.get("total_saida", 0) or 0)
                 tot_receitas = float(mm.get("total_entrada", 0) or 0)
                 saldo_mes = float(mm.get("saldo_mes", (tot_receitas - tot_despesas + float(mm.get('total_ajuste', 0) or 0))) or (tot_receitas - tot_despesas + float(mm.get('total_ajuste', 0) or 0)))
@@ -2175,19 +2180,50 @@ async def categorias_mes(query, context):
                     tot_despesas = float(cat_api.get("total_despesas", 0) or 0)
                 except:
                     tot_despesas = sum(float(v or 0) for v in (categorias_despesas or {}).values())
+        # Receitas: garantir completude comparando soma de categorias com total_entrada
+        need_refetch_rec = False
+        try:
+            sum_rec = sum(float(v or 0) for v in (categorias_receitas or {}).values())
+            if (not categorias_receitas) or (float(tot_receitas or 0) > 0 and abs(float(sum_rec or 0) - float(tot_receitas or 0)) > 1e-6):
+                need_refetch_rec = True
+        except:
+            need_refetch_rec = (not categorias_receitas)
+        if need_refetch_rec:
             try:
-                if (not mm) or saldo_mes == 0:
-                    total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
-                    tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
-                    tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
-                    tot_despesas = float(tot_all.get("despesas", tot_despesas) or tot_despesas)
-                    tot_receitas = float(tot_all.get("receitas", 0) or 0)
-                    saldo_mes = float(tot_all.get("saldo", (tot_receitas - tot_despesas)) or (tot_receitas - tot_despesas))
-                else:
-                    pass
+                extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=4000&{qs}"
+                x_api = await _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}", ttl=12, timeout=6)
             except:
-                pass
+                x_api = {}
+            if x_api.get("sucesso"):
+                try:
+                    rec_map = {}
+                    for t in (x_api.get("matches", []) or []):
+                        tp_raw = str(t.get("tipo", "")).strip().lower()
+                        if tp_raw != "entrada":
+                            continue
+                        cat = str(t.get("categoria", "outros") or "outros").strip().lower()
+                        v = float(t.get("valor", 0) or 0)
+                        if v > 0:
+                            rec_map[cat] = float(rec_map.get(cat, 0.0) or 0.0) + v
+                    categorias_receitas = rec_map
+                    try:
+                        tot_receitas = float(x_api.get("total_entrada_categoria", sum(float(v or 0) for v in rec_map.values())) or sum(float(v or 0) for v in rec_map.values()))
+                    except:
+                        tot_receitas = sum(float(v or 0) for v in rec_map.values())
+                except:
+                    pass
+        try:
+            if (not mm) or saldo_mes == 0:
+                total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
+                tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
+                tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
+                tot_despesas = float(tot_all.get("despesas", tot_despesas) or tot_despesas)
+                tot_receitas = float(tot_all.get("receitas", tot_receitas) or tot_receitas)
+                saldo_mes = float(tot_all.get("saldo", (tot_receitas - tot_despesas)) or (tot_receitas - tot_despesas))
+        except:
+            pass
         categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
+        categorias_receitas = {k: float(v or 0) for k, v in (categorias_receitas or {}).items() if float(v or 0) > 0}
         try:
             if saldo_mes == 0 and (tot_despesas > 0 or tot_receitas > 0):
                 saldo_mes = float(tot_receitas or 0) - float(tot_despesas or 0) + float((mm or {}).get("total_ajuste", 0) or 0)
@@ -2195,7 +2231,7 @@ async def categorias_mes(query, context):
             pass
         resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n"
         resposta += f"📅 {data_str}\n\n"
-        if not categorias_despesas and (tot_despesas <= 0 and tot_receitas <= 0):
+        if not categorias_despesas and not categorias_receitas and (tot_despesas <= 0 and tot_receitas <= 0):
             err_msg = "Nenhum dado encontrado para este mês."
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Voltar", callback_data="analise_mes")],
@@ -2209,6 +2245,7 @@ async def categorias_mes(query, context):
                 await query.message.reply_text(err_msg, parse_mode='Markdown', reply_markup=kb)
             return
         desp_sorted = sorted(categorias_despesas.items(), key=lambda x: -x[1])
+        rec_sorted = sorted(categorias_receitas.items(), key=lambda x: -x[1])
         largura = 28
         tabela = ""
         tabela += "DESPESAS\n"
@@ -2216,6 +2253,12 @@ async def categorias_mes(query, context):
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k).upper()
             linha = criar_linha_tabela(f"{label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
+            tabela += f"{linha}\n"
+        tabela += "\nRECEITAS\n"
+        tabela += ("-" * 3) + "\n"
+        for k, v in rec_sorted:
+            label = CATEGORY_NAMES.get(k, k).upper()
+            linha = criar_linha_tabela(f"{label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
             tabela += f"{linha}\n"
         linha_saldo = criar_linha_tabela("SALDO DO MÊS:", formatar_moeda(saldo_mes, negrito=False), True, "", largura=largura)
         tabela += f"\n{linha_saldo}"
