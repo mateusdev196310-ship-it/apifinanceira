@@ -2132,6 +2132,29 @@ async def categorias_mes(query, context):
             try:
                 categorias_despesas = dict(mm.get("categorias_saida", {}) or {})
                 categorias_receitas = dict(mm.get("categorias_entrada", {}) or {})
+                _cats_est = dict(mm.get("categorias_estorno", {}) or {})
+                try:
+                    base_keys = set(list(categorias_despesas.keys()) + list(_cats_est.keys()))
+                    categorias_despesas = {k: float(categorias_despesas.get(k, 0) or 0) - float(_cats_est.get(k, 0) or 0) for k in base_keys}
+                except:
+                    pass
+                try:
+                    rem_d = [k for k in categorias_despesas.keys() if "estorno" in str(k).strip().lower()]
+                    for k in rem_d:
+                        categorias_despesas.pop(k, None)
+                    rem_r = [k for k in categorias_receitas.keys() if "estorno" in str(k).strip().lower()]
+                    for k in rem_r:
+                        categorias_receitas.pop(k, None)
+                except:
+                    pass
+                try:
+                    if "transporte" in categorias_receitas:
+                        v = float(categorias_receitas.get("transporte", 0) or 0)
+                        if v > 0:
+                            categorias_despesas["transporte"] = float(categorias_despesas.get("transporte", 0) or 0) + v
+                            categorias_receitas.pop("transporte", None)
+                except:
+                    pass
             except:
                 categorias_despesas = {}
                 categorias_receitas = {}
@@ -2166,6 +2189,11 @@ async def categorias_mes(query, context):
                     saldo_mes = tot_receitas - tot_despesas
         categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
         categorias_receitas = {k: float(v or 0) for k, v in (categorias_receitas or {}).items() if float(v or 0) > 0}
+        try:
+            if saldo_mes == 0 and (tot_despesas > 0 or tot_receitas > 0):
+                saldo_mes = float(tot_receitas or 0) - float(tot_despesas or 0) + float((mm or {}).get("total_ajuste", 0) or 0)
+        except:
+            pass
         resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n"
         resposta += f"📅 {data_str}\n\n"
         if not categorias_despesas and not categorias_receitas and (tot_despesas <= 0 and tot_receitas <= 0):
