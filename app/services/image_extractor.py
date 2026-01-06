@@ -435,5 +435,6 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     continue
             if out_rb:
                 return out_rb
-        except:
-            return []
+        return []
+    except:
+        return []
