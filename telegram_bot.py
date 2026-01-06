@@ -2250,6 +2250,8 @@ async def categorias_mes(query, context):
             url_cg = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
             cg_api = await _req_json_cached_async(url_cg, f"cg:{cid}:{mkey}", ttl=12, timeout=5)
             if cg_api.get("sucesso"):
+                prev_exp = dict(categorias_despesas or {})
+                prev_rec = dict(categorias_receitas or {})
                 cg = cg_api.get("categorias", {}) or {}
                 d_g = dict(cg.get("despesas", {}) or {})
                 e_g = dict(cg.get("estornos", {}) or {})
@@ -2257,6 +2259,17 @@ async def categorias_mes(query, context):
                 base_keys = set(list(d_g.keys()) + list(e_g.keys()))
                 categorias_despesas = {str(k).strip().lower(): float(d_g.get(k, 0) or 0) - float(e_g.get(k, 0) or 0) for k in base_keys}
                 categorias_receitas = {str(k).strip().lower(): float(v or 0) for k, v in (r_g or {}).items()}
+                try:
+                    for k, v in (prev_exp or {}).items():
+                        kk = str(k).strip().lower()
+                        if kk not in categorias_despesas and float(v or 0) > 0:
+                            categorias_despesas[kk] = float(v or 0)
+                    for k, v in (prev_rec or {}).items():
+                        kk = str(k).strip().lower()
+                        if kk not in categorias_receitas and float(v or 0) > 0:
+                            categorias_receitas[kk] = float(v or 0)
+                except:
+                    pass
                 tot_cg = cg_api.get("total", {}) or {}
                 try:
                     tot_despesas = float(tot_cg.get("despesas", tot_despesas) or tot_despesas)
@@ -2264,6 +2277,20 @@ async def categorias_mes(query, context):
                     saldo_mes = float(tot_cg.get("saldo", (tot_receitas - tot_despesas)) or (tot_receitas - tot_despesas))
                 except:
                     pass
+        except:
+            pass
+        try:
+            if (not categorias_despesas) and float(tot_despesas or 0) > 0:
+                url_cm = f"{API_URL}/categorias/mes?mes={mkey}&{qs}"
+                cm_api = await _req_json_cached_async(url_cm, f"cm:{cid}:{mkey}", ttl=10, timeout=4)
+                cmm = dict(cm_api.get("categorias") or {}) if cm_api.get("sucesso") else {}
+                des_m = dict(cmm.get("despesas", {}) or {})
+                est_m = dict(cmm.get("estornos", {}) or {})
+                base_m = set(list(des_m.keys()) + list(est_m.keys()))
+                net_m = {str(k).strip().lower(): float(des_m.get(k, 0) or 0) - float(est_m.get(k, 0) or 0) for k in base_m}
+                for k, v in net_m.items():
+                    if float(v or 0) > 0:
+                        categorias_despesas[str(k).strip().lower()] = float(v or 0)
         except:
             pass
         categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
