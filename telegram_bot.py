@@ -2128,44 +2128,33 @@ async def categorias_mes(query, context):
             geral_api = {}
             extrato_api = {}
         transacoes = extrato_api.get("matches", []) if extrato_api.get("sucesso") else []
-        grupos = {}
+        categorias_despesas = {}
+        categorias_receitas = {}
         for t in transacoes or []:
-            tp_raw = str(t.get('tipo', '')).strip().lower()
-            if tp_raw in ('0', 'despesa', 'saida'):
-                tp_use = 'saida'
-            elif tp_raw in ('1', 'receita', 'entrada'):
-                tp_use = 'entrada'
-            else:
+            if t.get('estornado'):
                 continue
+            tp_raw = str(t.get('tipo', '')).strip().lower()
+            v = float(t.get('valor', 0) or 0)
             cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
-            grupos.setdefault(cat, []).append({
-                "tipo": tp_use,
-                "valor": float(t.get('valor', 0) or 0),
-                "descricao": str(t.get('descricao', '') or '')
-            })
-        def _tot_cat(lst):
-            d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-            r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-            return r - d
+            is_despesa = tp_raw in ('0', 'despesa', 'saida')
+            is_receita = tp_raw in ('1', 'receita', 'entrada')
+            if is_despesa:
+                categorias_despesas[cat] = float(categorias_despesas.get(cat, 0.0) or 0.0) + v
+                tot_despesas += v
+            elif is_receita:
+                categorias_receitas[cat] = float(categorias_receitas.get(cat, 0.0) or 0.0) + v
+                tot_receitas += v
         resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n"
         resposta += f"📅 {data_str}\n\n"
-        tot_despesas = 0.0
-        tot_receitas = 0.0
-        mapa_desp = {}
-        mapa_rec = {}
+        categorias_despesas = {k: float(v or 0) for k, v in categorias_despesas.items() if float(v or 0) > 0}
+        categorias_receitas = {k: float(v or 0) for k, v in categorias_receitas.items() if float(v or 0) > 0}
         try:
-            for k, lst in grupos.items():
-                dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-                rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-                if dd > 0:
-                    mapa_desp[k] = dd
-                if rr > 0:
-                    mapa_rec[k] = rr
+            if tot_despesas <= 0:
+                tot_despesas = sum(float(v or 0) for v in categorias_despesas.values())
+            if tot_receitas <= 0:
+                tot_receitas = sum(float(v or 0) for v in categorias_receitas.values())
         except:
-            mapa_desp = {}
-            mapa_rec = {}
-        tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
-        tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
+            pass
         try:
             if (tot_despesas <= 0 and tot_receitas <= 0) and extrato_api.get("sucesso"):
                 t_all = extrato_api.get("total") or {}
@@ -2193,8 +2182,8 @@ async def categorias_mes(query, context):
                 tot_ajustes = 0.0
         except:
             tot_ajustes = 0.0
-        desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
-        rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+        desp_sorted = sorted(categorias_despesas.items(), key=lambda x: -x[1])
+        rec_sorted = sorted(categorias_receitas.items(), key=lambda x: -x[1])
         # Se ainda vazio, tenta fallback mínimo via /categorias/mes (apenas despesas líquidas)
         if len(desp_sorted) == 0 and len(rec_sorted) == 0:
             try:
@@ -2204,9 +2193,9 @@ async def categorias_mes(query, context):
                     for k, v in dict(catmes_api.get("categorias") or {}).items():
                         val = float(v or 0)
                         if val > 0:
-                            mapa_desp[k] = val
-                    desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
-                    tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
+                            categorias_despesas[k] = val
+                    desp_sorted = sorted(categorias_despesas.items(), key=lambda x: -x[1])
+                    tot_despesas = sum(float(v or 0) for v in categorias_despesas.values())
             except:
                 pass
         largura = 28
