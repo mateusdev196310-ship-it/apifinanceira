@@ -1497,7 +1497,23 @@ async def relatorio_total(query, context):
             geral_api = {}
         tot_day = day_api.get("total", {"receitas": 0, "despesas": 0, "saldo": 0})
         if not (float(tot_day.get("receitas", 0) or 0) or float(tot_day.get("despesas", 0) or 0) or float(tot_day.get("ajustes", 0) or 0)):
-            tot_day = {"receitas": 0, "despesas": 0, "saldo": 0}
+            try:
+                extrato_url = f"{API_URL}/extrato/hoje?include_transacoes=true&{build_cliente_query_params(query)}"
+                extrato_api = await _req_json_cached_async(extrato_url, f"extrato:{cid}:{dkey}", ttl=10, timeout=5)
+                if extrato_api.get("sucesso"):
+                    et = extrato_api.get("total", {}) or {}
+                    if float(et.get("receitas", 0) or 0) or float(et.get("despesas", 0) or 0) or float(et.get("ajustes", 0) or 0):
+                        tot_day = {
+                            "receitas": float(et.get("receitas", 0) or 0),
+                            "despesas": float(et.get("despesas", 0) or 0),
+                            "saldo": float(et.get("saldo", (et.get("receitas", 0) or 0) - (et.get("despesas", 0) or 0) + (et.get("ajustes", 0) or 0)) or 0),
+                        }
+                    else:
+                        tot_day = {"receitas": 0, "despesas": 0, "saldo": 0}
+                else:
+                    tot_day = {"receitas": 0, "despesas": 0, "saldo": 0}
+            except:
+                tot_day = {"receitas": 0, "despesas": 0, "saldo": 0}
         
         resposta = criar_cabecalho("TOTAIS DO DIA", 40)
         resposta += f"\n\n📅 {data_str}\n\n"
