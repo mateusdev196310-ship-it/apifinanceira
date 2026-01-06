@@ -2224,17 +2224,45 @@ async def categorias_mes(query, context):
                 pass
         desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
         rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
-        largura = 40
-        resposta += "DESPESAS\n"
+        if len(desp_sorted) == 0 and len(rec_sorted) == 0:
+            try:
+                extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=1000&{qs}"
+                extrato_api = await _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}:all", ttl=10, timeout=5)
+            except:
+                extrato_api = {}
+            try:
+                matches = extrato_api.get("matches", []) if extrato_api.get("sucesso") else []
+            except:
+                matches = []
+            try:
+                for t in matches:
+                    tp = str(t.get("tipo", "")).strip().lower()
+                    cat = str(t.get("categoria", "outros") or "outros").strip().lower()
+                    val = float(t.get("valor", 0) or 0)
+                    if tp == "saida" and val > 0:
+                        mapa_desp[cat] = float(mapa_desp.get(cat, 0) or 0) + val
+                    elif tp == "entrada" and val > 0:
+                        mapa_rec[cat] = float(mapa_rec.get(cat, 0) or 0) + val
+                income_keys = {"salario", "vendas", "outros"}
+                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
+            except:
+                pass
+            desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
+            rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+        largura = 28
+        tabela = ""
+        tabela += "DESPESAS\n"
+        tabela += ("-" * 3) + "\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
             linha = criar_linha_tabela(f"{label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
-            resposta += f"{linha}\n"
-        resposta += "\nRECEITAS\n"
+            tabela += f"{linha}\n"
+        tabela += "\nRECEITAS\n"
+        tabela += ("-" * 3) + "\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
             linha = criar_linha_tabela(f"{label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
-            resposta += f"{linha}\n"
+            tabela += f"{linha}\n"
         try:
             tot_obj = (cat_api.get("total") or {}) if cat_api.get("sucesso") else {}
         except:
@@ -2243,8 +2271,9 @@ async def categorias_mes(query, context):
             saldo_mes = float(tot_obj.get("saldo")) if tot_obj.get("saldo") is not None else (tot_receitas - tot_despesas + float(tot_ajustes or 0))
         except:
             saldo_mes = tot_receitas - tot_despesas + float(tot_ajustes or 0)
-        linha_saldo = criar_linha_tabela("SALDO DO MÊS:", formatar_moeda(saldo_mes, negrito=True), True, "", largura=largura)
-        resposta += f"\n{linha_saldo}\n"
+        linha_saldo = criar_linha_tabela("SALDO DO MÊS:", formatar_moeda(saldo_mes, negrito=False), True, "", largura=largura)
+        tabela += f"\n{linha_saldo}"
+        resposta += wrap_code_block(tabela) + "\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
             saldo_geral = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
