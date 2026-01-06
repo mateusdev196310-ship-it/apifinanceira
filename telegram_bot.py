@@ -2457,7 +2457,7 @@ async def expandir_categorias_dia(query, context, limit: int = 6):
 async def detalhar_categoria_mes(query, context, categoria_key: str, off_saida: int = 0, off_entrada: int = 0):
     hoje = _now_sp()
     mkey = _month_key_sp()
-    data_str = hoje.strftime("%B/%Y").title()
+    data_str = _mes_ano_pt(hoje)
     try:
         qs = build_cliente_query_params(query)
         cid = get_cliente_id(query)
@@ -2560,7 +2560,7 @@ async def detalhar_categoria_mes(query, context, categoria_key: str, off_saida: 
 async def expandir_categorias_mes(query, context, limit: int = 6):
     hoje = _now_sp()
     mkey = _month_key_sp()
-    data_str = hoje.strftime("%B/%Y").title()
+    data_str = _mes_ano_pt(hoje)
     processing_msg = None
     try:
         if hasattr(query, 'edit_message_text'):

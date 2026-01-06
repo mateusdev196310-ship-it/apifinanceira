@@ -1,5 +1,6 @@
 # arquivo: api_financeira.py
 from flask import Flask, request, jsonify
+import time
 import os
 from datetime import datetime, timedelta, timezone
 from flask_cors import CORS
@@ -11,6 +12,23 @@ from app.services.pdf_extractor import extrair_transacoes_de_pdf, extrair_totais
 
 app = Flask(__name__)
 CORS(app)  # Permitir requisições do bot
+_API_CACHE = {}
+def _cache_get_api(key):
+    try:
+        v = _API_CACHE.get(key)
+        if not v:
+            return None
+        exp, data = v
+        if time.time() > float(exp or 0):
+            return None
+        return data
+    except:
+        return None
+def _cache_set_api(key, data, ttl=12):
+    try:
+        _API_CACHE[key] = (time.time() + float(ttl or 0), data)
+    except:
+        pass
 
 from app.config import API_HOST, API_PORT
 import re as _re
@@ -1327,6 +1345,7 @@ def extrato_hoje():
 
 @app.route('/extrato/mes', methods=['GET'])
 def extrato_mes():
+    start_time = time.time()
     mes_qs = request.args.get("mes")
     mes_atual = mes_qs or _month_key_sp()
     categoria_qs = request.args.get("categoria")
@@ -1341,6 +1360,24 @@ def extrato_mes():
             ensure_cliente(cliente_id, nome=cliente_nome, username=cliente_username)
         except:
             pass
+        cache_key = f"extrato_mes:{cliente_id}:{mes_atual}:{str(categoria_qs or '-').strip().lower()}"
+        c = _cache_get_api(cache_key)
+        if c is not None:
+            l = max(0, limit_qs)
+            o = max(0, offset_qs)
+            page = c["matches"][o:o+l] if l > 0 else c["matches"][o:]
+            rt = time.time() - start_time
+            return jsonify({
+                "sucesso": True,
+                "mes": mes_atual,
+                "quantidade": len(page),
+                "matches": page,
+                "total_saida_categoria": float(c.get("total_saida_categoria", 0) or 0),
+                "total_entrada_categoria": float(c.get("total_entrada_categoria", 0) or 0),
+                "performance": {
+                    "response_time_ms": round(rt * 1000, 2)
+                }
+            })
         ano, m = mes_atual.split("-")
         dt_ini = f"{ano}-{m}-01"
         if m == "12":
@@ -1357,6 +1394,7 @@ def extrato_mes():
         except:
             tops = []
         idx = {}
+        tops_count = 0
         for it in tops:
             o = it.to_dict() or {}
             if bool(o.get('estornado', False)):
@@ -1388,10 +1426,12 @@ def extrato_mes():
                 "timestamp_criacao": ts_str,
             }
             matches.append(safe)
+            tops_count += 1
         try:
             cur = datetime.strptime(dt_ini, "%Y-%m-%d")
             end = datetime.strptime(dt_fim, "%Y-%m-%d")
-            while cur < end:
+            # Apenas varre subcoleções por dia quando não há documentos no topo
+            while (tops_count == 0) and (cur < end):
                 dkey = cur.strftime("%Y-%m-%d")
                 try:
                     dd = root.collection('dias').document(dkey).get().to_dict() or {}
@@ -1458,21 +1498,35 @@ def extrato_mes():
         l = max(0, limit_qs)
         o = max(0, offset_qs)
         page = matches[o:o+l] if l > 0 else matches[o:]
-        return jsonify({
+        resp = {
             "sucesso": True,
             "mes": mes_atual,
             "quantidade": len(page),
             "matches": page,
             "total_saida_categoria": float(total_saida_cat or 0),
             "total_entrada_categoria": float(total_entrada_cat or 0),
-        })
+            "performance": {
+                "response_time_ms": round((time.time() - start_time) * 1000, 2)
+            }
+        }
+        try:
+            _cache_set_api(cache_key, {
+                "matches": matches,
+                "total_saida_categoria": float(total_saida_cat or 0),
+                "total_entrada_categoria": float(total_entrada_cat or 0),
+            }, ttl=15)
+        except:
+            pass
+        return jsonify(resp)
     except Exception as e:
-        return jsonify({"sucesso": False, "erro": str(e)}), 500
+        rt = time.time() - start_time
+        return jsonify({"sucesso": False, "erro": str(e), "performance": {"response_time_ms": round(rt * 1000, 2)}}), 500
 @app.route('/total/mes', methods=['GET'])
 def total_mes():
     """Retorna totais do mês atual ou do mês fornecido."""
     mes_qs = request.args.get("mes")
     mes_atual = mes_qs or _month_key_sp()
+    cache_key = None
     total_despesas = 0
     total_receitas = 0
     quantidade_transacoes_validas = 0
@@ -1488,6 +1542,10 @@ def total_mes():
             ensure_cliente(cliente_id, nome=cliente_nome, username=cliente_username)
         except:
             pass
+        cache_key = f"total_mes:{cliente_id}:{mes_atual}"
+        c = _cache_get_api(cache_key)
+        if c is not None:
+            return jsonify(c)
         mref = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual).get()
         mm = mref.to_dict() or {}
         total_despesas = float(mm.get("total_saida", 0) or 0)
@@ -1593,8 +1651,7 @@ def total_mes():
             mdoc.set(mm2, merge=True)
         except:
             pass
-        
-        return jsonify({
+        resp = {
             "sucesso": True,
             "mes": mes_atual,
             "total": {
@@ -1606,7 +1663,9 @@ def total_mes():
             },
             "quantidade_transacoes": int(mm.get("quantidade_transacoes", 0) or 0),
             "quantidade_transacoes_validas": int(quantidade_transacoes_validas)
-        })
+        }
+        _cache_set_api(cache_key, resp, ttl=20)
+        return jsonify(resp)
         
     except Exception as e:
         return jsonify({"sucesso": False, "erro": str(e)}), 500
