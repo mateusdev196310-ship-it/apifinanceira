@@ -2243,12 +2243,16 @@ async def categorias_mes(query, context):
         tabela += ("-" * 3) + "\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
+            if label and not str(label)[0].isalnum():
+                label = str(label).split(" ", 1)[1] if " " in str(label) else str(label)
             linha = criar_linha_tabela(f"{label}", formatar_moeda(v, negrito=False), True, "", largura=largura)
             tabela += f"{linha}\n"
         tabela += "\nRECEITAS\n"
         tabela += ("-" * 3) + "\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
+            if label and not str(label)[0].isalnum():
+                label = str(label).split(" ", 1)[1] if " " in str(label) else str(label)
             linha = criar_linha_tabela(f"{label}", f"+{formatar_moeda(v, negrito=False)}", True, "", largura=largura)
             tabela += f"{linha}\n"
         try:

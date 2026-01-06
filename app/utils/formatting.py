@@ -18,16 +18,14 @@ def criar_linha_tabela(descricao, valor, alinhar_direita=True, emoji="", largura
     FS = "\u2007"
     if alinhar_direita and largura is not None:
         valor_str = str(valor)
-        min_right = 12
-        max_right = max(min_right, len(valor_str))
-        right_width = min(max_right, max(min_right, largura - 13))
-        left_width = max(12, largura - 1 - right_width)
+        gap = 1
+        max_left = max(0, (largura or 0) - len(valor_str) - gap)
         desc_use = (descricao or "")
-        if len(desc_use) > left_width:
-            desc_use = desc_use[:left_width]
-        pad_len = max(0, left_width - len(desc_use))
-        pad = FS * pad_len
-        base = f"{desc_use}{pad} {valor_str:>{right_width}}"
+        if len(desc_use) > max_left:
+            desc_use = desc_use[:max_left]
+        pad_len = max_left - len(desc_use)
+        pad = (FS * pad_len) + (" " * gap)
+        base = f"{desc_use}{pad}{valor_str}"
     else:
         base = f"{descricao} {valor}"
     if emoji:
