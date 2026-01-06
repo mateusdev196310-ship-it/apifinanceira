@@ -2293,6 +2293,39 @@ async def categorias_mes(query, context):
                         categorias_despesas[str(k).strip().lower()] = float(v or 0)
         except:
             pass
+        try:
+            try:
+                ano, m = mkey.split("-")
+            except:
+                ano, m = hoje.strftime("%Y"), hoje.strftime("%m")
+            dt_ini = f"{ano}-{m}-01"
+            dt_fim = f"{int(ano)+1}-01-01" if m == "12" else f"{ano}-{int(m)+1:02d}-01"
+            prev_exp2 = dict(categorias_despesas or {})
+            prev_rec2 = dict(categorias_receitas or {})
+            url_cg2 = f"{API_URL}/saldo/atual?dt_ini={dt_ini}&dt_fim={dt_fim}&group_by=categoria&{qs}"
+            cg_api2 = await _req_json_cached_async(url_cg2, f"cg2:{cid}:{mkey}", ttl=12, timeout=5)
+            if cg_api2.get("sucesso"):
+                cg2 = cg_api2.get("categorias", {}) or {}
+                d_g2 = dict(cg2.get("despesas", {}) or {})
+                e_g2 = dict(cg2.get("estornos", {}) or {})
+                r_g2 = dict(cg2.get("receitas", {}) or {})
+                keys2 = set(list(d_g2.keys()) + list(e_g2.keys()))
+                d_net2 = {str(k).strip().lower(): float(d_g2.get(k, 0) or 0) - float(e_g2.get(k, 0) or 0) for k in keys2}
+                categorias_despesas = {k: float(v or 0) for k, v in d_net2.items()}
+                categorias_receitas = {str(k).strip().lower(): float(v or 0) for k, v in (r_g2 or {}).items()}
+                try:
+                    for k, v in (prev_exp2 or {}).items():
+                        kk = str(k).strip().lower()
+                        if kk not in categorias_despesas and float(v or 0) > 0:
+                            categorias_despesas[kk] = float(v or 0)
+                    for k, v in (prev_rec2 or {}).items():
+                        kk = str(k).strip().lower()
+                        if kk not in categorias_receitas and float(v or 0) > 0:
+                            categorias_receitas[kk] = float(v or 0)
+                except:
+                    pass
+        except:
+            pass
         categorias_despesas = {k: float(v or 0) for k, v in (categorias_despesas or {}).items() if float(v or 0) > 0}
         categorias_receitas = {k: float(v or 0) for k, v in (categorias_receitas or {}).items() if float(v or 0) > 0}
         try:
