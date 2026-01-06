@@ -1430,8 +1430,7 @@ def extrato_mes():
         try:
             cur = datetime.strptime(dt_ini, "%Y-%m-%d")
             end = datetime.strptime(dt_fim, "%Y-%m-%d")
-            # Apenas varre subcoleções por dia quando não há documentos no topo
-            while (tops_count == 0) and (cur < end):
+            while cur < end:
                 dkey = cur.strftime("%Y-%m-%d")
                 try:
                     dd = root.collection('dias').document(dkey).get().to_dict() or {}
