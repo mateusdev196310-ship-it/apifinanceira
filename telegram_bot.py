@@ -2245,8 +2245,11 @@ async def categorias_mes(query, context):
                         mapa_rec[cat] = float(mapa_rec.get(cat, 0) or 0) + val
                 income_keys = {"salario", "vendas", "outros"}
                 mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if k in income_keys and float(v or 0) > 0}
+                tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
+                tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
             except:
-                pass
+                tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
+                tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
             desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
             rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
         largura = 28
