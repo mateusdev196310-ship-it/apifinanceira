@@ -2167,19 +2167,38 @@ async def categorias_mes(query, context):
             need_refetch = (not categorias_despesas)
         if not mm or need_refetch:
             try:
-                catmes_url = f"{API_URL}/categorias/mes?mes={mkey}&{qs}"
-                cat_api = await _req_json_cached_async(catmes_url, f"catmes:{cid}:{mkey}", ttl=10, timeout=5)
+                ano, m = mkey.split("-")
+                dt_ini = f"{ano}-{m}-01"
+                if m == "12":
+                    dt_fim = f"{int(ano)+1}-01-01"
+                else:
+                    dt_fim = f"{ano}-{int(m)+1:02d}-01"
+                agg_exp = {}
+                agg_est = {}
+                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+                end = datetime.strptime(dt_fim, "%Y-%m-%d")
+                while cur < end:
+                    dkey = cur.strftime("%Y-%m-%d")
+                    try:
+                        dd = root.collection('dias').document(dkey).get().to_dict() or {}
+                    except:
+                        dd = {}
+                    try:
+                        for k, v in dict(dd.get("categorias_saida", {}) or {}).items():
+                            agg_exp[k] = float(agg_exp.get(k, 0) or 0) + float(v or 0)
+                        for k, v in dict(dd.get("categorias_estorno", {}) or {}).items():
+                            agg_est[k] = float(agg_est.get(k, 0) or 0) + float(v or 0)
+                    except:
+                        pass
+                    cur = cur + timedelta(days=1)
+                keys = set(list(agg_exp.keys()) + list(agg_est.keys()))
+                categorias_despesas = {k: float(agg_exp.get(k, 0) or 0) - float(agg_est.get(k, 0) or 0) for k in keys}
+                try:
+                    tot_despesas = float(mm.get("total_saida", sum(float(v or 0) for v in categorias_despesas.values())) or sum(float(v or 0) for v in categorias_despesas.values()))
+                except:
+                    tot_despesas = sum(float(v or 0) for v in categorias_despesas.values())
             except:
-                cat_api = {}
-            if cat_api.get("sucesso"):
-                try:
-                    categorias_despesas = dict(cat_api.get("categorias", {}) or {})
-                except:
-                    categorias_despesas = {}
-                try:
-                    tot_despesas = float(cat_api.get("total_despesas", 0) or 0)
-                except:
-                    tot_despesas = sum(float(v or 0) for v in (categorias_despesas or {}).values())
+                pass
         # Receitas: garantir completude comparando soma de categorias com total_entrada
         need_refetch_rec = False
         try:
@@ -2190,28 +2209,34 @@ async def categorias_mes(query, context):
             need_refetch_rec = (not categorias_receitas)
         if need_refetch_rec:
             try:
-                extrato_mes_url = f"{API_URL}/extrato/mes?mes={mkey}&limit=4000&{qs}"
-                x_api = await _req_json_cached_async(extrato_mes_url, f"xmes:{cid}:{mkey}", ttl=12, timeout=6)
-            except:
-                x_api = {}
-            if x_api.get("sucesso"):
-                try:
-                    rec_map = {}
-                    for t in (x_api.get("matches", []) or []):
-                        tp_raw = str(t.get("tipo", "")).strip().lower()
-                        if tp_raw != "entrada":
-                            continue
-                        cat = str(t.get("categoria", "outros") or "outros").strip().lower()
-                        v = float(t.get("valor", 0) or 0)
-                        if v > 0:
-                            rec_map[cat] = float(rec_map.get(cat, 0.0) or 0.0) + v
-                    categorias_receitas = rec_map
+                ano, m = mkey.split("-")
+                dt_ini = f"{ano}-{m}-01"
+                if m == "12":
+                    dt_fim = f"{int(ano)+1}-01-01"
+                else:
+                    dt_fim = f"{ano}-{int(m)+1:02d}-01"
+                agg_inc = {}
+                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+                end = datetime.strptime(dt_fim, "%Y-%m-%d")
+                while cur < end:
+                    dkey = cur.strftime("%Y-%m-%d")
                     try:
-                        tot_receitas = float(x_api.get("total_entrada_categoria", sum(float(v or 0) for v in rec_map.values())) or sum(float(v or 0) for v in rec_map.values()))
+                        dd = root.collection('dias').document(dkey).get().to_dict() or {}
                     except:
-                        tot_receitas = sum(float(v or 0) for v in rec_map.values())
+                        dd = {}
+                    try:
+                        for k, v in dict(dd.get("categorias_entrada", {}) or {}).items():
+                            agg_inc[k] = float(agg_inc.get(k, 0) or 0) + float(v or 0)
+                    except:
+                        pass
+                    cur = cur + timedelta(days=1)
+                categorias_receitas = {k: float(v or 0) for k, v in agg_inc.items()}
+                try:
+                    tot_receitas = float(mm.get("total_entrada", sum(float(v or 0) for v in categorias_receitas.values())) or sum(float(v or 0) for v in categorias_receitas.values()))
                 except:
-                    pass
+                    tot_receitas = sum(float(v or 0) for v in categorias_receitas.values())
+            except:
+                pass
         try:
             if (not mm) or saldo_mes == 0:
                 total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
