@@ -2153,7 +2153,14 @@ async def categorias_mes(query, context):
                 tot_despesas = sum(float(v or 0) for v in dict(mm.get("categorias_saida", {}) or {}).values())
                 tot_receitas = sum(float(v or 0) for v in dict(mm.get("categorias_entrada", {}) or {}).values())
                 saldo_mes = tot_receitas - tot_despesas
-        if not mm or ((not categorias_despesas) and (tot_despesas <= 0 and tot_receitas <= 0)):
+        need_refetch = False
+        try:
+            sum_liquido = sum(float(v or 0) for v in (categorias_despesas or {}).values())
+            if (not categorias_despesas) or (float(tot_despesas or 0) > 0 and abs(float(sum_liquido or 0) - float(tot_despesas or 0)) > 1e-6):
+                need_refetch = True
+        except:
+            need_refetch = (not categorias_despesas)
+        if not mm or need_refetch:
             try:
                 catmes_url = f"{API_URL}/categorias/mes?mes={mkey}&{qs}"
                 cat_api = await _req_json_cached_async(catmes_url, f"catmes:{cid}:{mkey}", ttl=10, timeout=5)
