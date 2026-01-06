@@ -1910,13 +1910,10 @@ async def analise_mensal(query, context):
                 tm = best
                 estornos_mes = float(tm.get("estornos", 0) or 0)
                 if best_name == "mes" and cats_month_api.get("sucesso"):
-                    categorias_desp = cats_month_api.get("categorias", {}) or {}
-                    est_map = cats_month_api.get("categorias_estorno", {}) or {}
                     try:
-                        categorias_desp = {k: float(v or 0) - float(est_map.get(k, 0) or 0) for k, v in categorias_desp.items()}
-                        categorias_desp = {k: float(v or 0) for k, v in categorias_desp.items() if float(v or 0) > 0}
+                        categorias_desp = {k: float(v or 0) for k, v in dict(cats_month_api.get("categorias") or {}).items() if float(v or 0) > 0}
                     except:
-                        pass
+                        categorias_desp = dict(cats_month_api.get("categorias") or {})
                 elif best_name in ("soma", "sum", "grp"):
                     try:
                         cats_grp2 = cats_group_api.get("categorias", {}) if cats_group_api.get("sucesso") else {}
@@ -2267,17 +2264,15 @@ async def categorias_mes(query, context):
                 catmes_api = {}
             try:
                 if catmes_api.get("sucesso"):
-                    cats_exp = dict((catmes_api.get("categorias") or {}).get("saida", {}) or {})
-                    if not cats_exp:
-                        # alguns retornam com chave 'despesas'
-                        cats_exp = dict((catmes_api.get("categorias") or {}).get("despesas", {}) or {})
-                    cats_est = dict((catmes_api.get("categorias") or {}).get("estornos", {}) or {})
-                    keys_all = set(list(cats_exp.keys()) + list(cats_est.keys()))
-                    for k in keys_all:
-                        val = float(cats_exp.get(k, 0) or 0) - float(cats_est.get(k, 0) or 0)
-                        if float(val or 0) > 0:
-                            mapa_desp[k] = float(val or 0)
-                    tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
+                    cats_exp = dict(catmes_api.get("categorias") or {})
+                    for k, v in cats_exp.items():
+                        val = float(v or 0)
+                        if val > 0:
+                            mapa_desp[k] = val
+                    try:
+                        tot_despesas = float(catmes_api.get("total_despesas", 0) or 0)
+                    except:
+                        tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
                     desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
             except:
                 pass
