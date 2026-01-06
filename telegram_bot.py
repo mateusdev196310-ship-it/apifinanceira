@@ -2259,6 +2259,54 @@ async def categorias_mes(query, context):
                 tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
             desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
             rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+        if len(desp_sorted) == 0:
+            try:
+                catmes_url = f"{API_URL}/categorias/mes?mes={mkey}&{qs}"
+                catmes_api = await _req_json_cached_async(catmes_url, f"catmes:{cid}:{mkey}", ttl=10, timeout=5)
+            except:
+                catmes_api = {}
+            try:
+                if catmes_api.get("sucesso"):
+                    cats_exp = dict((catmes_api.get("categorias") or {}).get("saida", {}) or {})
+                    if not cats_exp:
+                        # alguns retornam com chave 'despesas'
+                        cats_exp = dict((catmes_api.get("categorias") or {}).get("despesas", {}) or {})
+                    cats_est = dict((catmes_api.get("categorias") or {}).get("estornos", {}) or {})
+                    keys_all = set(list(cats_exp.keys()) + list(cats_est.keys()))
+                    for k in keys_all:
+                        val = float(cats_exp.get(k, 0) or 0) - float(cats_est.get(k, 0) or 0)
+                        if float(val or 0) > 0:
+                            mapa_desp[k] = float(val or 0)
+                    tot_despesas = sum(float(v or 0) for v in mapa_desp.values())
+                    desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
+            except:
+                pass
+        if len(rec_sorted) == 0:
+            try:
+                extrato_mes_url2 = f"{API_URL}/extrato/mes?mes={mkey}&limit=1000&{qs}"
+                extrato_api2 = await _req_json_cached_async(extrato_mes_url2, f"xmes2:{cid}:{mkey}:all", ttl=10, timeout=5)
+            except:
+                extrato_api2 = {}
+            try:
+                matches2 = extrato_api2.get("matches", []) if extrato_api2.get("sucesso") else []
+            except:
+                matches2 = []
+            try:
+                agg_rec2 = {}
+                for t in matches2:
+                    tp = str(t.get("tipo", "")).strip().lower()
+                    cat = str(t.get("categoria", "outros") or "outros").strip().lower()
+                    val = float(t.get("valor", 0) or 0)
+                    if tp == "entrada" and val > 0:
+                        agg_rec2[cat] = float(agg_rec2.get(cat, 0) or 0) + val
+                for k, v in agg_rec2.items():
+                    if float(v or 0) > 0:
+                        mapa_rec[k] = float(v or 0)
+                mapa_rec = {k: float(v or 0) for k, v in mapa_rec.items() if float(v or 0) > 0}
+                tot_receitas = sum(float(v or 0) for v in mapa_rec.values())
+                rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
+            except:
+                pass
         largura = 28
         tabela = ""
         tabela += "DESPESAS\n"
