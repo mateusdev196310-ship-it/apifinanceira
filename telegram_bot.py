@@ -526,19 +526,17 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
             for k, v in dict(mm.get(campo, {}) or {}).items():
                 agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
         items = sorted(((k, float(v or 0)) for k, v in agg.items()), key=lambda x: (-x[1], x[0]))
-        lst = [k for k, _ in items if k in CATEGORY_LIST and k not in ("duvida", "outros")]
+        lst = [k for k, _ in items if k not in ("duvida", "outros")]
         return lst[:limit]
     except:
         return []
 def _categoria_keyboard(ref_id: str, tipo: str, chat_id: str):
     base_prior = ["alimentacao", "transporte", "saude"]
-    cats = [c for c in CATEGORY_LIST if c not in ("duvida", "outros")]
     usados = _top_categorias_cliente(chat_id, tipo, limit=9)
-    usados = [c for c in usados if c in cats]
     lst = []
     seen = set()
     for c in base_prior + usados:
-        if c in cats and c not in seen:
+        if c not in ("duvida", "outros") and c not in seen:
             seen.add(c)
             lst.append(c)
     if len(lst) > 9:
@@ -3507,8 +3505,8 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
         ref_id = str(cat_ctx.get("ref_id") or "")
         tipo = str(cat_ctx.get("tipo") or "")
         cat_txt = str(texto or "").strip()
-        mapped = _map_text_to_category(cat_txt)
-        use_cat = mapped if mapped not in ("outros", "duvida") else (_normalize_ascii(cat_txt) if len(_normalize_ascii(cat_txt)) >= 3 else "outros")
+        cat_norm = _normalize_ascii(cat_txt)
+        use_cat = cat_norm if len(cat_norm) >= 3 else "outros"
         payload = {
             "cliente_id": get_cliente_id(update),
             "referencia_id": ref_id,
