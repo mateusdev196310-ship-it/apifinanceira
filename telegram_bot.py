@@ -2052,6 +2052,27 @@ async def categorias_dia(query, context):
         categorias = (cat_api.get("categorias", {}) or {}) if cat_api.get("sucesso") else {}
         despesas_map = dict((categorias.get("despesas") or {}))
         receitas_map = dict((categorias.get("receitas") or {}))
+        if (not despesas_map) and (not receitas_map):
+            try:
+                extrato_url2 = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
+                extrato_api2 = await _req_json_async(extrato_url2, timeout=6)
+                transacoes = extrato_api2.get("transacoes", []) if extrato_api2.get("sucesso") else []
+                if not transacoes:
+                    transacoes = extrato_api2.get("matches", []) if extrato_api2.get("sucesso") else []
+                for t in transacoes or []:
+                    if t.get('estornado'):
+                        continue
+                    tp_raw = str(t.get('tipo', '')).strip().lower()
+                    if tp_raw not in ('saida','entrada'):
+                        continue
+                    cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+                    v = float(t.get('valor', 0) or 0)
+                    if tp_raw == 'saida':
+                        despesas_map[cat] = float(despesas_map.get(cat, 0) or 0) + v
+                    else:
+                        receitas_map[cat] = float(receitas_map.get(cat, 0) or 0) + v
+            except:
+                pass
         desp_sorted = sorted(((k, float(v or 0)) for k, v in despesas_map.items()), key=lambda x: -x[1])
         rec_sorted = sorted(((k, float(v or 0)) for k, v in receitas_map.items()), key=lambda x: -x[1])
         resposta = criar_cabecalho("CATEGORIAS DO DIA", 40)
@@ -2142,6 +2163,7 @@ async def categorias_mes(query, context):
         geral_url = f"{API_URL}/saldo/atual?{qs}"
         cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
         total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
+        extrato_url_fb = f"{API_URL}/extrato/mes?mes={mkey}&include_transacoes=true&limit=600&{qs}"
         try:
             geral_api, cat_api, tm_api = await asyncio.gather(
                 _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=2),
@@ -2164,6 +2186,24 @@ async def categorias_mes(query, context):
                 categorias2 = (cat_api2.get("categorias", {}) or {})
                 despesas = dict((categorias2.get("despesas") or {}))
                 receitas = dict((categorias2.get("receitas") or {}))
+        if (not despesas) and (not receitas):
+            try:
+                ext_api = await _req_json_async(extrato_url_fb, timeout=6)
+                transacoes = ext_api.get("transacoes", []) if ext_api.get("sucesso") else []
+                if not transacoes:
+                    transacoes = ext_api.get("matches", []) if ext_api.get("sucesso") else []
+                for t in transacoes or []:
+                    if t.get('estornado'):
+                        continue
+                    tp_raw = str(t.get('tipo', '')).strip().lower()
+                    if tp_raw not in ('saida','entrada'):
+                        continue
+                    cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+                    v = float(t.get('valor', 0) or 0)
+                    if tp_raw == 'saida':
+                        despesas[cat] = float(despesas.get(cat, 0) or 0) + v
+                    else:
+                        receitas[cat] = float(receitas.get(cat, 0) or 0) + v
         despesas = {k: float(v or 0) for k, v in despesas.items() if float(v or 0) > 0}
         receitas = {k: float(v or 0) for k, v in receitas.items() if float(v or 0) > 0}
         tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
