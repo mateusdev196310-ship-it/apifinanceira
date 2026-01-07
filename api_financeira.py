@@ -1625,8 +1625,60 @@ def total_mes():
             while cur < end:
                 dkey = cur.strftime("%Y-%m-%d")
                 try:
-                    dd = root.collection('dias').document(dkey).get().to_dict() or {}
+                    ddoc = root.collection('dias').document(dkey).get()
+                    dd = ddoc.to_dict() or {}
                     _t = _dd_totais(dd)
+                    need_fix = (float(_t["entrada"] or 0.0) == 0.0 and float(_t["saida"] or 0.0) == 0.0 and float(_t["ajuste"] or 0.0) == 0.0 and float(_t["estorno"] or 0.0) == 0.0)
+                    if need_fix:
+                        try:
+                            td1 = tr1 = taj1 = tes1 = 0.0
+                            cnt_validas = 0
+                            try:
+                                items_q = root.collection('transacoes').document(dkey).collection('items').stream()
+                            except:
+                                items_q = []
+                            for it in items_q:
+                                o = it.to_dict() or {}
+                                if bool(o.get('estornado', False)):
+                                    continue
+                                tp_raw = str(o.get('tipo', '')).strip().lower()
+                                val = float(o.get('valor', 0) or 0)
+                                if tp_raw in ('entrada','1','receita'):
+                                    tr1 += val
+                                    cnt_validas += 1
+                                elif tp_raw in ('saida','0','despesa'):
+                                    td1 += val
+                                    cnt_validas += 1
+                                elif tp_raw in ('ajuste',):
+                                    taj1 += val
+                                    cnt_validas += 1
+                                elif tp_raw in ('estorno',):
+                                    tes1 += abs(val)
+                            if (tr1 != 0.0 or td1 != 0.0 or taj1 != 0.0 or tes1 != 0.0):
+                                saldo_dia = float(tr1 - td1 + tes1 + taj1)
+                                try:
+                                    root.collection('dias').document(dkey).set({
+                                        "totais_dia": {
+                                            "total_entrada": float(tr1 or 0.0),
+                                            "total_saida": float(td1 or 0.0),
+                                            "total_ajuste": float(taj1 or 0.0),
+                                            "total_estorno": float(tes1 or 0.0),
+                                            "saldo_dia": float(saldo_dia or 0.0),
+                                        },
+                                        "quantidade_transacoes_validas": int(cnt_validas or 0),
+                                        "atualizado_em": firestore.SERVER_TIMESTAMP,
+                                    }, merge=True)
+                                except:
+                                    pass
+                                _t = {
+                                    "entrada": float(tr1 or 0.0),
+                                    "saida": float(td1 or 0.0),
+                                    "ajuste": float(taj1 or 0.0),
+                                    "estorno": float(tes1 or 0.0),
+                                    "saldo": float(saldo_dia or 0.0),
+                                }
+                        except:
+                            pass
                     total_despesas += float(_t["saida"])
                     total_receitas += float(_t["entrada"])
                     total_ajustes += float(_t["ajuste"])
