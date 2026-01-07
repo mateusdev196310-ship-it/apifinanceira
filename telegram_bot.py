@@ -1498,9 +1498,9 @@ async def relatorio_total(query, context):
         geral_url = f"{API_URL}/saldo/atual?{build_cliente_query_params(query)}"
         try:
             day_api, mes_api, geral_api = await asyncio.gather(
-                _req_json_cached_async(day_url, f"day:{cid}:{dkey}", ttl=10, timeout=4),
-                _req_json_cached_async(month_url, f"month:{cid}:{mkey}", ttl=15, timeout=4),
-                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=30, timeout=4),
+                _req_json_cached_async(day_url, f"day:{cid}:{dkey}", ttl=10, timeout=2),
+                _req_json_cached_async(month_url, f"month:{cid}:{mkey}", ttl=15, timeout=2),
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=30, timeout=2),
             )
         except:
             day_api = {}
@@ -1765,7 +1765,10 @@ async def relatorio_diario(query, context):
         processing_msg = None
     try:
         try:
-            extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(query)}", timeout=5).json()
+            qs = build_cliente_query_params(query)
+            cid = get_cliente_id(query)
+            extrato_url = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
+            extrato = await _req_json_cached_async(extrato_url, f"extrato:{cid}:{_day_key_sp()}", ttl=8, timeout=4)
         except:
             extrato = {"sucesso": False}
         transacoes_dia = extrato.get("transacoes", []) if extrato.get("sucesso") else []
@@ -1847,10 +1850,10 @@ async def analise_mensal(query, context):
         consistency_url = f"{API_URL}/health/consistency?{build_cliente_query_params(query)}"
         try:
             total_api, sum_api, cats_group_api, cons_api = await asyncio.gather(
-                _req_json_cached_async(url_total, f"month-total:{cid}:{mkey}", ttl=15, timeout=4),
-                _req_json_cached_async(url_sum, f"month-sum:{cid}:{mkey}", ttl=15, timeout=4),
-                _req_json_cached_async(url_cats_group, f"monthcatgrp:{cid}:{mkey}", ttl=15, timeout=4),
-                _req_json_cached_async(consistency_url, f"consistency:{cid}:{mkey}", ttl=10, timeout=4),
+                _req_json_cached_async(url_total, f"month-total:{cid}:{mkey}", ttl=15, timeout=2),
+                _req_json_cached_async(url_sum, f"month-sum:{cid}:{mkey}", ttl=15, timeout=2),
+                _req_json_cached_async(url_cats_group, f"monthcatgrp:{cid}:{mkey}", ttl=15, timeout=2),
+                _req_json_cached_async(consistency_url, f"consistency:{cid}:{mkey}", ttl=10, timeout=2),
             )
         except:
             total_api = {}
@@ -2026,37 +2029,19 @@ async def categorias_dia(query, context):
         cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
         cat_url = f"{API_URL}/saldo/atual?inicio={dkey}&fim={dkey}&group_by=categoria&{qs}"
-        extrato_url = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
         try:
-            geral_api, cat_api, extrato_api = await asyncio.gather(
-                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
-                _req_json_cached_async(cat_url, f"daycats:{cid}:{dkey}", ttl=10, timeout=4),
-                _req_json_cached_async(extrato_url, f"extrato:{cid}:{dkey}", ttl=8, timeout=5),
+            geral_api, cat_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=2),
+                _req_json_cached_async(cat_url, f"daycats:{cid}:{dkey}", ttl=10, timeout=2),
             )
         except:
             geral_api = {}
             cat_api = {}
-            extrato_api = {}
-        transacoes = extrato_api.get("transacoes", []) if extrato_api.get("sucesso") else []
-        grupos = {}
-        for t in transacoes or []:
-            if t.get('estornado'):
-                continue
-            tp_raw = str(t.get('tipo', '')).strip().lower()
-            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
-                continue
-            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
-            grupos.setdefault(cat, []).append({
-                "tipo": ('saida' if tp_raw in ('0', 'despesa', 'saida') else 'entrada'),
-                "valor": float(t.get('valor', 0) or 0),
-                "descricao": str(t.get('descricao', '') or '')
-            })
-        def _tot_cat(lst):
-            d = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-            r = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-            return r - d
-        ordenadas = sorted(((k, v) for k, v in grupos.items()), key=lambda x: (-sum(float(it.get('valor', 0) or 0) for it in x[1] if it.get('tipo') == 'saida'), x[0]))
-        ordenadas = ordenadas[:6] if len(ordenadas) > 6 else ordenadas
+        categorias = (cat_api.get("categorias", {}) or {}) if cat_api.get("sucesso") else {}
+        despesas_map = dict((categorias.get("despesas") or {}))
+        receitas_map = dict((categorias.get("receitas") or {}))
+        desp_sorted = sorted(((k, float(v or 0)) for k, v in despesas_map.items()), key=lambda x: -x[1])
+        rec_sorted = sorted(((k, float(v or 0)) for k, v in receitas_map.items()), key=lambda x: -x[1])
         resposta = criar_cabecalho("CATEGORIAS DO DIA", 40)
         resposta += f"\n📅 {data_str}\n\n"
         tot_periodo = extrato_api.get("total", {}) if extrato_api.get("sucesso") else {}
@@ -2093,7 +2078,7 @@ async def categorias_dia(query, context):
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
             resposta += f"  {pad(label)}+{formatar_moeda(v, negrito=False)}\n"
-        saldo_dia = tot_receitas - tot_despesas
+        saldo_dia = float(sum((v for _, v in rec_sorted), 0.0)) - float(sum((v for _, v in desp_sorted), 0.0))
         resposta += f"\nSaldo do dia: {formatar_moeda(saldo_dia, negrito=True)}\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
@@ -2142,83 +2127,26 @@ async def categorias_mes(query, context):
     try:
         qs = build_cliente_query_params(query)
         cid = get_cliente_id(query)
-        db = get_db()
-        root = db.collection('clientes').document(str(cid))
+        geral_url = f"{API_URL}/saldo/atual?{qs}"
+        cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
+        total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
         try:
-            ano, m = mkey.split("-")
+            geral_api, cat_api, tm_api = await asyncio.gather(
+                _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=2),
+                _req_json_cached_async(cat_group_url, f"monthcats:{cid}:{mkey}", ttl=12, timeout=2),
+                _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=12, timeout=2),
+            )
         except:
-            ano, m = hoje.strftime("%Y"), hoje.strftime("%m")
-        dt_ini = f"{ano}-{m}-01"
-        dt_fim = f"{int(ano)+1}-01-01" if m == "12" else f"{ano}-{int(m)+1:02d}-01"
-        transacoes = []
-        try:
-            q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
-            docs = []
-            try:
-                docs = q.stream()
-            except:
-                docs = []
-            idx = {}
-            tl = []
-            for d in docs:
-                o = d.to_dict() or {}
-                k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                if not idx.get(k):
-                    idx[k] = 1
-                    tl.append(o)
-            if not tl:
-                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                end = datetime.strptime(dt_fim, "%Y-%m-%d")
-                while cur < end:
-                    dkey = cur.strftime("%Y-%m-%d")
-                    try:
-                        items = root.collection('transacoes').document(dkey).collection('items').stream()
-                    except:
-                        items = []
-                    try:
-                        tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
-                    except:
-                        tops = []
-                    for d in items:
-                        o = d.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if not idx.get(k):
-                            idx[k] = 1
-                            tl.append(o)
-                    for d in tops:
-                        o = d.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if not idx.get(k):
-                            idx[k] = 1
-                            tl.append(o)
-                    cur = cur + timedelta(days=1)
-            transacoes = tl
-        except:
-            transacoes = []
-        despesas = {}
-        receitas = {}
-        for t in transacoes or []:
-            if t.get('estornado'):
-                continue
-            tp_raw = str(t.get('tipo', '')).strip().lower()
-            if tp_raw not in ('0', 'despesa', 'saida', '1', 'receita', 'entrada'):
-                continue
-            cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
-            val = float(t.get('valor', 0) or 0)
-            if tp_raw in ('0', 'despesa', 'saida'):
-                despesas[cat] = float(despesas.get(cat, 0) or 0) + val
-            else:
-                receitas[cat] = float(receitas.get(cat, 0) or 0) + val
+            geral_api = {}
+            cat_api = {}
+            tm_api = {}
+        categorias = (cat_api.get("categorias", {}) or {}) if cat_api.get("sucesso") else {}
+        despesas = dict((categorias.get("despesas") or {}))
+        receitas = dict((categorias.get("receitas") or {}))
         despesas = {k: float(v or 0) for k, v in despesas.items() if float(v or 0) > 0}
         receitas = {k: float(v or 0) for k, v in receitas.items() if float(v or 0) > 0}
-        saldo_mes = 0.0
-        try:
-            total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
-            tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=5)
-            tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
-            saldo_mes = float(tot_all.get("saldo", (sum(receitas.values()) - sum(despesas.values()))) or (sum(receitas.values()) - sum(despesas.values())))
-        except:
-            saldo_mes = sum(receitas.values()) - sum(despesas.values())
+        tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
+        saldo_mes = float(tot_all.get("saldo", (sum(receitas.values()) - sum(despesas.values()))) or (sum(receitas.values()) - sum(despesas.values())))
         resposta = "📊 *RELATÓRIO DE CATEGORIAS*\n"
         resposta += f"📅 {data_str}\n\n"
         if not despesas and not receitas and (saldo_mes == 0):
@@ -2570,65 +2498,19 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
         cid = get_cliente_id(query)
         geral_url = f"{API_URL}/saldo/atual?{qs}"
         cat_group_url = f"{API_URL}/saldo/atual?mes={mkey}&group_by=categoria&{qs}"
+        extrato_url = f"{API_URL}/extrato/mes?mes={mkey}&include_transacoes=true&limit=600&{qs}"
         try:
-            geral_api, cat_api = await asyncio.gather(
+            geral_api, cat_api, extrato_api = await asyncio.gather(
                 _req_json_cached_async(geral_url, f"geral:{cid}", ttl=20, timeout=4),
-                _req_json_cached_async(cat_group_url, f"catgrp:{cid}:{mkey}", ttl=10, timeout=5),
+                _req_json_cached_async(cat_group_url, f"catgrp:{cid}:{mkey}", ttl=12, timeout=4),
+                _req_json_cached_async(extrato_url, f"xmes-all:{cid}:{mkey}", ttl=12, timeout=5),
             )
         except:
             geral_api = {}
             cat_api = {}
-        transacoes = []
+            extrato_api = {}
         try:
-            db = get_db()
-            root = db.collection('clientes').document(str(cid))
-            ano, m = mkey.split("-")
-            dt_ini = f"{ano}-{m}-01"
-            if m == "12":
-                dt_fim = f"{int(ano)+1}-01-01"
-            else:
-                dt_fim = f"{ano}-{int(m)+1:02d}-01"
-            q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
-            docs = []
-            try:
-                docs = q.stream()
-            except:
-                docs = []
-            idx = {}
-            tl = []
-            for d in docs:
-                o = d.to_dict() or {}
-                k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                if not idx.get(k):
-                    idx[k] = 1
-                    tl.append(o)
-            if not tl:
-                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                end = datetime.strptime(dt_fim, "%Y-%m-%d")
-                while cur < end:
-                    dkey = cur.strftime("%Y-%m-%d")
-                    try:
-                        items = root.collection('transacoes').document(dkey).collection('items').stream()
-                    except:
-                        items = []
-                    try:
-                        tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
-                    except:
-                        tops = []
-                    for d in items:
-                        o = d.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if not idx.get(k):
-                            idx[k] = 1
-                            tl.append(o)
-                    for d in tops:
-                        o = d.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if not idx.get(k):
-                            idx[k] = 1
-                            tl.append(o)
-                    cur = cur + timedelta(days=1)
-            transacoes = tl
+            transacoes = (extrato_api.get("transacoes", []) if extrato_api.get("sucesso") else []) or (extrato_api.get("matches", []) if extrato_api.get("sucesso") else [])
         except:
             transacoes = []
         grupos = {}
@@ -2723,7 +2605,10 @@ async def resumo_hoje(query, context):
         processing_msg = None
     try:
         try:
-            extrato = requests.get(f"{API_URL}/extrato/hoje?{build_cliente_query_params(query)}", timeout=5).json()
+            qs = build_cliente_query_params(query)
+            cid = get_cliente_id(query)
+            extrato_url = f"{API_URL}/extrato/hoje?include_transacoes=true&{qs}"
+            extrato = await _req_json_cached_async(extrato_url, f"extrato:{cid}:{_day_key_sp()}", ttl=8, timeout=4)
         except:
             extrato = {"sucesso": False}
         transacoes_dia = extrato.get("transacoes", []) if extrato.get("sucesso") else []
@@ -2804,7 +2689,11 @@ async def total_semana(query, context):
         processing_msg = None
     try:
         try:
-            total_sem = requests.get(f"{API_URL}/total/semana?{build_cliente_query_params(query)}", timeout=5).json()
+            qs = build_cliente_query_params(query)
+            cid = get_cliente_id(query)
+            wk = hoje.strftime("%Y-%U")
+            url = f"{API_URL}/total/semana?{qs}"
+            total_sem = await _req_json_cached_async(url, f"tsemana:{cid}:{wk}", ttl=10, timeout=4)
         except:
             total_sem = {"sucesso": False}
         resposta = criar_cabecalho("TOTAIS DA SEMANA", 40)
@@ -2862,16 +2751,14 @@ async def extrato_detalhado(query, context):
         url_mes = f"{API_URL}/saldo/atual?mes={mk}&{qs}"
         url_geral = f"{API_URL}/saldo/atual?{qs}"
         try:
-            day_api = requests.get(url_dia, timeout=6).json()
+            day_api, mes_api, geral_api = await asyncio.gather(
+                _req_json_cached_async(url_dia, f"extrato:{cid}:{_day_key_sp()}", ttl=8, timeout=4),
+                _req_json_cached_async(url_mes, f"month:{cid}:{mk}", ttl=12, timeout=4),
+                _req_json_cached_async(url_geral, f"geral:{cid}", ttl=20, timeout=4),
+            )
         except:
             day_api = {"sucesso": False}
-        try:
-            mes_api = requests.get(url_mes, timeout=6).json()
-        except:
             mes_api = {"sucesso": False}
-        try:
-            geral_api = requests.get(url_geral, timeout=6).json()
-        except:
             geral_api = {"sucesso": False}
         d_tot = (day_api or {}).get("total") or {}
         m_tot = (mes_api or {}).get("total") or {}
