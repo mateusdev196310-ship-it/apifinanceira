@@ -3528,6 +3528,13 @@ async def processar_mensagem_texto(update: Update, context: CallbackContext):
         up = data.get("atualizacao", {}) or {}
         rid = str(up.get("ref_id") or ref_id or "")
         nova = str(up.get("categoria_nova") or use_cat)
+        try:
+            pend = context.user_data.get("pending_confirmations") or {}
+            if rid:
+                pend.pop(rid, None)
+            context.user_data["pending_confirmations"] = pend
+        except:
+            pass
         ltb = context.user_data.get("last_tx_block") or {}
         items = list(ltb.get("items", []) or [])
         for it in items:
