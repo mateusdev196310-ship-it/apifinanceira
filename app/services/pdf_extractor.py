@@ -4,6 +4,7 @@ import re
 import json
 from typing import List, Dict, Optional, Tuple, Union
 from app.services.rule_based import parse_text_to_transactions, clean_desc, detect_category, naturalize_description, natural_score, parse_value
+from app.services.deepseek import generate_json as ds_generate
 from app.services.gemini import get_client
 import numpy as np
 
@@ -221,8 +222,7 @@ def _dedup_transacoes(items: List[Dict]) -> List[Dict]:
     return list(d.values())
 
 def _try_gemini_transacoes(texto: str) -> Optional[List[Dict]]:
-    cli = get_client()
-    if not cli or not texto or len(texto) < 20:
+    if not texto or len(texto) < 20:
         return None
     prompt = (
         "Extraia transações financeiras do texto a seguir.\n"
@@ -231,13 +231,9 @@ def _try_gemini_transacoes(texto: str) -> Optional[List[Dict]]:
         "Texto:\n" + texto[:20000]
     )
     try:
-        resposta = cli.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        out = (getattr(resposta, "text", "") or "").strip()
+        out = ds_generate(prompt, temperature=0.0, max_tokens=800, timeout=25, system_instruction="Responda apenas JSON com chave 'transacoes'.") or ""
         if not out:
-            return None
+            raise Exception("ds_empty")
         j = None
         try:
             j = json.loads(out)
@@ -249,13 +245,44 @@ def _try_gemini_transacoes(texto: str) -> Optional[List[Dict]]:
                 except:
                     j = None
         if not j or not isinstance(j, dict):
-            return None
+            raise Exception("ds_invalid")
         arr = j.get("transacoes") or j.get("transactions") or []
         if not isinstance(arr, list):
-            return None
+            raise Exception("ds_no_list")
         return arr
     except:
-        return None
+        try:
+            cli = get_client()
+        except:
+            cli = None
+        if not cli:
+            return None
+        try:
+            resposta = cli.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            out = (getattr(resposta, "text", "") or "").strip()
+            if not out:
+                return None
+            j = None
+            try:
+                j = json.loads(out)
+            except:
+                m = re.search(r'\{[\s\S]*\}', out)
+                if m:
+                    try:
+                        j = json.loads(m.group(0))
+                    except:
+                        j = None
+            if not j or not isinstance(j, dict):
+                return None
+            arr = j.get("transacoes") or j.get("transactions") or []
+            if not isinstance(arr, list):
+                return None
+            return arr
+        except:
+            return None
 
 def extrair_transacoes_de_pdf(path: Optional[str] = None, data: Optional[bytes] = None) -> List[Dict]:
     if path and not os.path.exists(path):
@@ -288,8 +315,7 @@ _VENC_PATTERNS = [
 ]
 
 def _try_gemini_totais(texto: str) -> Optional[Dict]:
-    cli = get_client()
-    if not cli or not texto or len(texto) < 20:
+    if not texto or len(texto) < 20:
         return None
     prompt = (
         "Você receberá o texto extraído de uma fatura bancária/cartão em português.\n"
@@ -303,13 +329,9 @@ def _try_gemini_totais(texto: str) -> Optional[Dict]:
         "Texto:\n" + texto[:20000]
     )
     try:
-        resposta = cli.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        out = (getattr(resposta, "text", "") or "").strip()
+        out = ds_generate(prompt, temperature=0.0, max_tokens=400, timeout=20, system_instruction="Responda apenas JSON com as chaves solicitadas.") or ""
         if not out:
-            return None
+            raise Exception("ds_empty")
         j = None
         try:
             j = json.loads(out)
@@ -321,14 +343,46 @@ def _try_gemini_totais(texto: str) -> Optional[Dict]:
                 except:
                     j = None
         if not j or not isinstance(j, dict):
-            return None
+            raise Exception("ds_invalid")
         return {
             "total_a_pagar": j.get("total_a_pagar"),
             "pagamento": j.get("pagamento"),
             "vencimento": j.get("vencimento"),
         }
     except:
-        return None
+        try:
+            cli = get_client()
+        except:
+            cli = None
+        if not cli:
+            return None
+        try:
+            resposta = cli.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            out = (getattr(resposta, "text", "") or "").strip()
+            if not out:
+                return None
+            j = None
+            try:
+                j = json.loads(out)
+            except:
+                m = re.search(r'\{[\s\S]*\}', out)
+                if m:
+                    try:
+                        j = json.loads(m.group(0))
+                    except:
+                        j = None
+            if not j or not isinstance(j, dict):
+                return None
+            return {
+                "total_a_pagar": j.get("total_a_pagar"),
+                "pagamento": j.get("pagamento"),
+                "vencimento": j.get("vencimento"),
+            }
+        except:
+            return None
 
 def parse_pdf_totais(text: str) -> Dict:
     if not text or len(text) < 10:

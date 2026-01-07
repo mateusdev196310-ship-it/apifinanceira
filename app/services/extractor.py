@@ -1,8 +1,8 @@
 import re
 import json
+from app.services.deepseek import generate_json as ds_generate
 from app.services.gemini import get_client, set_cooldown
 from app.constants.categories import CATEGORY_LIST
-from google.genai import types
 from app.services.rule_based import parse_text_to_transactions, naturalize_description, natural_score
 def extrair_informacoes_financeiras(texto_usuario):
     cat_list = ", ".join(CATEGORY_LIST)
@@ -434,80 +434,135 @@ def extrair_informacoes_financeiras(texto_usuario):
             except:
                 pass
             return rb
-        client = get_client()
         ai_resultados = []
-        if client is not None:
+        try:
+            resposta_texto = ds_generate(
+                prompt,
+                temperature=0.1,
+                max_tokens=512,
+                timeout=25,
+                system_instruction="Você é um extrator financeiro PT-BR. Retorne somente JSON válido sem textos extras."
+            ) or ""
+            resposta_texto = resposta_texto.replace('```json', '').replace('```', '').strip()
+            json_match = re.search(r'\[.*\]', resposta_texto, re.DOTALL)
+            if json_match:
+                resposta_texto = json_match.group(0)
             try:
-                resposta = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction="Você é um extrator financeiro PT-BR. Siga rigorosamente as regras do prompt e retorne somente JSON válido, sem texto extra.",
-                        temperature=0.1,
-                        max_output_tokens=512,
-                    ),
-                )
-                resposta_texto = resposta.text.strip()
-                resposta_texto = resposta_texto.replace('```json', '').replace('```', '').strip()
-                json_match = re.search(r'\[.*\]', resposta_texto, re.DOTALL)
-                if json_match:
-                    resposta_texto = json_match.group(0)
-                try:
-                    dados_lista = json.loads(resposta_texto)
-                    if isinstance(dados_lista, list):
-                        normalizados = []
-                        for item in dados_lista:
-                            if 'valor' in item:
-                                item['valor'] = float(item['valor'])
-                            tipo_n = str(item.get('tipo')).strip()
-                            cat_n = str(item.get('categoria', '')).strip().lower()
-                            desc_raw = str(item.get('descricao', ''))
-                            desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
-                            desc_final = re.sub(r'\s+', ' ', desc_final).strip()
-                            toks = desc_final.split()
-                            if len(toks) > 6:
-                                desc_final = ' '.join(toks[:6])
-                            item['descricao'] = desc_final
-                            normalizados.append(item)
-                        dedup = {}
-                        for item in normalizados:
-                            tipo_n = str(item.get('tipo')).strip()
-                            valor_n = float(item.get('valor', 0))
-                            cat_n = str(item.get('categoria', '')).strip().lower()
-                            k = (tipo_n, valor_n, cat_n)
-                            cur = dedup.get(k)
-                            if cur is None or len(str(item.get('descricao', ''))) < len(str(cur.get('descricao', ''))):
-                                dedup[k] = item
-                        ai_resultados = list(dedup.values())
-                    elif isinstance(dados_lista, dict):
-                        if 'valor' in dados_lista:
-                            dados_lista['valor'] = float(dados_lista['valor'])
-                        tipo_n = str(dados_lista.get('tipo')).strip()
-                        cat_n = str(dados_lista.get('categoria', '')).strip().lower()
-                        desc_raw = str(dados_lista.get('descricao', ''))
+                dados_lista = json.loads(resposta_texto)
+                if isinstance(dados_lista, list):
+                    normalizados = []
+                    for item in dados_lista:
+                        if 'valor' in item:
+                            item['valor'] = float(item['valor'])
+                        tipo_n = str(item.get('tipo')).strip()
+                        cat_n = str(item.get('categoria', '')).strip().lower()
+                        desc_raw = str(item.get('descricao', ''))
                         desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
                         desc_final = re.sub(r'\s+', ' ', desc_final).strip()
                         toks = desc_final.split()
                         if len(toks) > 6:
                             desc_final = ' '.join(toks[:6])
-                        dados_lista['descricao'] = desc_final
-                        ai_resultados = [dados_lista]
-                except:
-                    ai_resultados = []
-            except Exception as e:
-                try:
-                    msg = str(e) if e else ""
-                    if ("RESOURCE_EXHAUSTED" in msg) or ("429" in msg) or ("Too Many Requests" in msg):
-                        try:
-                            import os
-                            set_cooldown(int(os.getenv("GEMINI_COOLDOWN_SECONDS", "900") or "900"))
-                        except:
-                            set_cooldown(900)
-                    else:
-                        pass
-                except:
-                    pass
+                        item['descricao'] = desc_final
+                        normalizados.append(item)
+                    dedup = {}
+                    for item in normalizados:
+                        tipo_n = str(item.get('tipo')).strip()
+                        valor_n = float(item.get('valor', 0))
+                        cat_n = str(item.get('categoria', '')).strip().lower()
+                        k = (tipo_n, valor_n, cat_n)
+                        cur = dedup.get(k)
+                        if cur is None or len(str(item.get('descricao', ''))) < len(str(cur.get('descricao', ''))):
+                            dedup[k] = item
+                    ai_resultados = list(dedup.values())
+                elif isinstance(dados_lista, dict):
+                    if 'valor' in dados_lista:
+                        dados_lista['valor'] = float(dados_lista['valor'])
+                    tipo_n = str(dados_lista.get('tipo')).strip()
+                    cat_n = str(dados_lista.get('categoria', '')).strip().lower()
+                    desc_raw = str(dados_lista.get('descricao', ''))
+                    desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
+                    desc_final = re.sub(r'\s+', ' ', desc_final).strip()
+                    toks = desc_final.split()
+                    if len(toks) > 6:
+                        desc_final = ' '.join(toks[:6])
+                    dados_lista['descricao'] = desc_final
+                    ai_resultados = [dados_lista]
+            except:
                 ai_resultados = []
+        except:
+            ai_resultados = []
+        if not ai_resultados:
+            try:
+                client = get_client()
+            except:
+                client = None
+            if client is not None:
+                try:
+                    resposta = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=prompt,
+                    )
+                    resposta_texto = (getattr(resposta, "text", "") or "").strip()
+                    resposta_texto = resposta_texto.replace('```json', '').replace('```', '').strip()
+                    json_match = re.search(r'\[.*\]', resposta_texto, re.DOTALL)
+                    if json_match:
+                        resposta_texto = json_match.group(0)
+                    try:
+                        dados_lista = json.loads(resposta_texto)
+                        if isinstance(dados_lista, list):
+                            normalizados = []
+                            for item in dados_lista:
+                                if 'valor' in item:
+                                    item['valor'] = float(item['valor'])
+                                tipo_n = str(item.get('tipo')).strip()
+                                cat_n = str(item.get('categoria', '')).strip().lower()
+                                desc_raw = str(item.get('descricao', ''))
+                                desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
+                                desc_final = re.sub(r'\s+', ' ', desc_final).strip()
+                                toks = desc_final.split()
+                                if len(toks) > 6:
+                                    desc_final = ' '.join(toks[:6])
+                                item['descricao'] = desc_final
+                                normalizados.append(item)
+                            dedup = {}
+                            for item in normalizados:
+                                tipo_n = str(item.get('tipo')).strip()
+                                valor_n = float(item.get('valor', 0))
+                                cat_n = str(item.get('categoria', '')).strip().lower()
+                                k = (tipo_n, valor_n, cat_n)
+                                cur = dedup.get(k)
+                                if cur is None or len(str(item.get('descricao', ''))) < len(str(cur.get('descricao', ''))):
+                                    dedup[k] = item
+                            ai_resultados = list(dedup.values())
+                        elif isinstance(dados_lista, dict):
+                            if 'valor' in dados_lista:
+                                dados_lista['valor'] = float(dados_lista['valor'])
+                            tipo_n = str(dados_lista.get('tipo')).strip()
+                            cat_n = str(dados_lista.get('categoria', '')).strip().lower()
+                            desc_raw = str(dados_lista.get('descricao', ''))
+                            desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
+                            desc_final = re.sub(r'\s+', ' ', desc_final).strip()
+                            toks = desc_final.split()
+                            if len(toks) > 6:
+                                desc_final = ' '.join(toks[:6])
+                            dados_lista['descricao'] = desc_final
+                            ai_resultados = [dados_lista]
+                    except:
+                        ai_resultados = []
+                except Exception as e:
+                    try:
+                        msg = str(e) if e else ""
+                        if ("RESOURCE_EXHAUSTED" in msg) or ("429" in msg) or ("Too Many Requests" in msg):
+                            try:
+                                import os
+                                set_cooldown(int(os.getenv("GEMINI_COOLDOWN_SECONDS", "900") or "900"))
+                            except:
+                                set_cooldown(900)
+                        else:
+                            pass
+                    except:
+                        pass
+                    ai_resultados = []
         if ai_resultados:
             try:
                 out2 = []
@@ -524,7 +579,7 @@ def extrair_informacoes_financeiras(texto_usuario):
             except:
                 pass
             try:
-                print(f"[extrair_informacoes_financeiras] fonte=gemini qtd={len(ai_resultados)}")
+                print(f"[extrair_informacoes_financeiras] fonte=ia qtd={len(ai_resultados)}")
             except:
                 pass
             return ai_resultados

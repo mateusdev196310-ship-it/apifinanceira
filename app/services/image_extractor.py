@@ -11,6 +11,7 @@ from app.services.gemini import get_client
 from google.genai import types
 from app.services.extractor import extrair_informacoes_financeiras
 from app.services.rule_based import detect_category, clean_desc, naturalize_description, detect_category_with_confidence
+from app.services.deepseek import generate_json as ds_generate
 
 def _infer_fields(tl: str, tp: str):
     s = (tl or "").lower()
@@ -98,9 +99,8 @@ def _detect_mime(data: bytes) -> str:
 
 def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str = ""):
     client = get_client()
-    if client is None:
-        client = None
-    try:
+    if True:
+    
         try:
             print("[image_extractor] start")
         except:
@@ -115,43 +115,6 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
         blob = types.Blob(mime_type=mime, data=dados)
         contents_ocr = _contents("Transcreva apenas o texto do comprovante/recibo. Retorne somente o texto puro.", blob)
         transcrito = (transcrito_override or "").strip()
-        if not transcrito:
-            try:
-                if client is not None:
-                    try:
-                        print("[image_extractor] before_ocr")
-                    except:
-                        pass
-                    try:
-                        ocr = client.models.generate_content(
-                            model='gemini-2.5-flash',
-                            contents=contents_ocr,
-                            config=types.GenerateContentConfig(
-                                temperature=0.0,
-                                max_output_tokens=800,
-                            ),
-                        )
-                        transcrito = (ocr.text or "").strip()
-                    except Exception as e:
-                        msg = str(e) if e else ""
-                        if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
-                            try:
-                                time.sleep(5)
-                                ocr = client.models.generate_content(
-                                    model='gemini-2.5-flash',
-                                    contents=contents_ocr,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.0,
-                                        max_output_tokens=800,
-                                    ),
-                                )
-                                transcrito = (ocr.text or "").strip()
-                            except Exception:
-                                transcrito = ""
-                        else:
-                            transcrito = ""
-            except:
-                transcrito = ""
         if not transcrito:
             try:
                 img = Image.open(io.BytesIO(dados)).convert("RGB")
@@ -254,6 +217,27 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                         pass
             except:
                 transcrito = transcrito or ""
+        if not transcrito:
+            try:
+                if client is not None:
+                    try:
+                        print("[image_extractor] gemini_ocr_fallback")
+                    except:
+                        pass
+                    try:
+                        ocr = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=contents_ocr,
+                            config=types.GenerateContentConfig(
+                                temperature=0.0,
+                                max_output_tokens=800,
+                            ),
+                        )
+                        transcrito = (ocr.text or "").strip()
+                    except:
+                        transcrito = ""
+            except:
+                transcrito = ""
         try:
             print(f"[image_extractor] ocr_len={len(transcrito)}")
         except:
@@ -277,16 +261,6 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     contents_img = _contents(prompt_img, blob)
                     try:
                         map_img = client.models.generate_content(
-                            model='gemini-1.5-flash',
-                            contents=contents_img,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                temperature=0.0,
-                                max_output_tokens=800,
-                            ),
-                        )
-                    except Exception:
-                        map_img = client.models.generate_content(
                             model='gemini-2.5-flash',
                             contents=contents_img,
                             config=types.GenerateContentConfig(
@@ -295,129 +269,48 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                                 max_output_tokens=800,
                             ),
                         )
-                    texto_img = (map_img.text or "").strip()
-                    try:
-                        dados_img = json.loads(texto_img)
-                    except:
+                        texto_img = (map_img.text or "").strip()
                         try:
-                            txti = texto_img.replace('```json', '').replace('```', '').strip()
-                            mi = re.search(r'\[\s*\{[\s\S]*?\}\s*\]', txti)
-                            dados_img = json.loads(mi.group(0)) if mi else []
+                            dados_img = json.loads(texto_img)
                         except:
-                            dados_img = []
-                    if isinstance(dados_img, dict):
-                        dados_img = [dados_img]
-                    if isinstance(dados_img, list) and dados_img:
-                        out_img = []
-                        for item in dados_img:
                             try:
-                                tipo = '0' if str(item.get('tipo')).strip() == '0' else ('1' if str(item.get('tipo')).strip() == '1' else '0')
-                                valor = float(item.get('valor', 0) or 0)
-                                cat = str(item.get('categoria', 'outros')).strip().lower() or 'outros'
-                                desc_raw = str(item.get('descricao', '')).strip()
-                                if not desc_raw:
-                                    desc_raw = 'Gasto por Imagem' if tipo == '0' else 'Receita por Imagem'
-                                fctx = _infer_fields(transcrito, tipo)
-                                out_img.append({
-                                    "tipo": tipo,
-                                    "valor": valor,
-                                    "categoria": cat,
-                                    "descricao": desc_raw,
-                                    "moeda": "BRL",
-                                    "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-                                    "estabelecimento": fctx.get("estabelecimento", ""),
-                                    "recebedor": fctx.get("recebedor", ""),
-                                    "data_transacao": fctx.get("data_transacao", ""),
-                                })
+                                txti = texto_img.replace('```json', '').replace('```', '').strip()
+                                mi = re.search(r'\[\s*\{[\s\S]*?\}\s*\]', txti)
+                                dados_img = json.loads(mi.group(0)) if mi else []
                             except:
-                                continue
-                        if out_img:
-                            return out_img
+                                dados_img = []
+                        if isinstance(dados_img, dict):
+                            dados_img = [dados_img]
+                        if isinstance(dados_img, list) and dados_img:
+                            out_img = []
+                            for item in dados_img:
+                                try:
+                                    tipo = '0' if str(item.get('tipo')).strip() == '0' else ('1' if str(item.get('tipo')).strip() == '1' else '0')
+                                    valor = float(item.get('valor', 0) or 0)
+                                    cat = str(item.get('categoria', 'outros')).strip().lower() or 'outros'
+                                    desc_raw = str(item.get('descricao', '')).strip()
+                                    if not desc_raw:
+                                        desc_raw = 'Gasto por Imagem' if tipo == '0' else 'Receita por Imagem'
+                                    fctx = _infer_fields(transcrito, tipo)
+                                    out_img.append({
+                                        "tipo": tipo,
+                                        "valor": valor,
+                                        "categoria": cat,
+                                        "descricao": desc_raw,
+                                        "moeda": "BRL",
+                                        "metodo_pagamento": fctx.get("metodo_pagamento", ""),
+                                        "estabelecimento": fctx.get("estabelecimento", ""),
+                                        "recebedor": fctx.get("recebedor", ""),
+                                        "data_transacao": fctx.get("data_transacao", ""),
+                                    })
+                                except:
+                                    continue
+                            if out_img:
+                                return out_img
+                    except:
+                        pass
                 except:
                     pass
-            try:
-                contents_vals = _contents("Liste todos os VALORES MONETÁRIOS visíveis na imagem (R$, números com vírgula ou ponto). Retorne APENAS um ARRAY JSON de números. Exemplo: [12.34, 35.90]", blob)
-                try:
-                    resp_vals = client.models.generate_content(
-                        model='gemini-1.5-flash',
-                        contents=contents_vals,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.0,
-                            max_output_tokens=400,
-                        ),
-                    )
-                except Exception:
-                    resp_vals = client.models.generate_content(
-                        model='gemini-2.5-flash',
-                        contents=contents_vals,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            temperature=0.0,
-                            max_output_tokens=400,
-                        ),
-                    )
-                texto_vals = (resp_vals.text or "").strip()
-                try:
-                    arr_vals = json.loads(texto_vals)
-                    if isinstance(arr_vals, dict):
-                        arr_vals = list(arr_vals.values())
-                except:
-                    arr_vals = []
-                num_vals = [float(x) for x in arr_vals if isinstance(x, (int, float)) or (isinstance(x, str) and x.replace(',', '.').replace(' ', '').replace('\u00a0', '').replace('R$', '').strip())]
-                if num_vals:
-                    valor = max([float(str(v).replace(',', '.')) for v in num_vals])
-                    tipo = '0'
-                    cat, conf = detect_category_with_confidence(clean_desc(transcrito.lower())) if transcrito else ('outros', 0.2)
-                    tlv = (transcrito or "").lower()
-                    def _nat(tl, tp, ct):
-                        s = tl or ""
-                        m = re.search(r'(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
-                        if m:
-                            return f"{m.group(1)} {m.group(2)}".strip()
-                        if tp == '1':
-                            if re.search(r'sal[áa]ri', s):
-                                return 'salário'
-                            if re.search(r'vend', s):
-                                return 'vendas'
-                            if 'pix' in s or 'depósito' in s or 'deposito' in s:
-                                return 'pix recebido'
-                            return 'receita'
-                        else:
-                            if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
-                                return 'mercado'
-                            if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
-                                return 'farmácia'
-                            if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
-                                return 'restaurante'
-                            if re.search(r'\buber\b', s, re.IGNORECASE):
-                                return 'uber'
-                            if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
-                                return 'combustível'
-                            if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
-                                return 'internet'
-                            if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
-                                return 'moradia'
-                            return ct or 'outros'
-                    desc_base = _nat(tlv, tipo, cat)
-                    desc = naturalize_description(tipo, cat, desc_base)
-                    fctx = _infer_fields(transcrito, tipo)
-                    return [{
-                        "tipo": tipo,
-                        "valor": float(valor),
-                        "categoria": cat,
-                        "descricao": desc,
-                        "moeda": "BRL",
-                        "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-                        "estabelecimento": fctx.get("estabelecimento", ""),
-                        "recebedor": fctx.get("recebedor", ""),
-                        "data_transacao": fctx.get("data_transacao", ""),
-                        "confidence_score": float(conf),
-                        "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
-                    }]
-            except:
-                pass
-            return []
         tl0 = transcrito.lower()
         def _best_valor(tl: str):
             lines = [x.strip().lower() for x in (tl or "").splitlines() if str(x).strip()]
@@ -540,28 +433,31 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             "Texto transcrito:\n"
             f"{transcrito}"
         )
-        contents_map = _contents(prompt_json, None)
         try:
-            map_json = client.models.generate_content(
-                model='gemini-1.5-flash',
-                contents=contents_map,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.0,
-                    max_output_tokens=800,
-                ),
-            )
-        except Exception:
-            map_json = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=contents_map,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.0,
-                    max_output_tokens=800,
-                ),
-            )
-        texto2 = (map_json.text or "").strip()
+            texto2 = ds_generate(
+                prompt_json,
+                temperature=0.0,
+                max_tokens=800,
+                timeout=20,
+                system_instruction="Retorne apenas um ARRAY JSON conforme solicitado."
+            ) or ""
+        except:
+            texto2 = ""
+        if not texto2 and client is not None:
+            try:
+                contents_map = _contents(prompt_json, None)
+                map_json = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=contents_map,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.0,
+                        max_output_tokens=800,
+                    ),
+                )
+                texto2 = (map_json.text or "").strip()
+            except:
+                texto2 = ""
         try:
             dados_lista2 = json.loads(texto2)
         except:
@@ -821,5 +717,4 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             "confidence_score": float(conf),
             "pendente_confirmacao": (cat == 'outros') or (float(conf) < 0.9),
         }]
-    except:
-        return []
+    
