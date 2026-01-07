@@ -3,9 +3,10 @@ import io
 import re
 import json
 from typing import List, Dict, Optional, Tuple, Union
-from app.services.rule_based import parse_text_to_transactions, clean_desc, detect_category, naturalize_description, natural_score, parse_value
+from app.services.rule_based import parse_value
 from app.services.deepseek import generate_json as ds_generate
 from app.services.gemini import get_client
+from google.genai import types
 import numpy as np
 
 def _read_file_bytes(path: str) -> bytes:
@@ -136,67 +137,7 @@ _AMOUNT_RE = re.compile(r'(?:R?\$?\s*)?(\(?-?\s*\)?)?(\d{1,3}(?:[.\s]\d{3})*(?:,
 _INCOME_HINT = re.compile(r'(?i)\b(recebi|recebido|recebimento|credito|cr[eé]dito|dep[óo]sito|entrada|sal[áa]rio|pix\\s+recebido|transfer[eê]ncia\\s+recebida)\b')
 _EXPENSE_HINT = re.compile(r'(?i)\b(d[eé]bito|debito|compra|pagamento|fatura|boleto|saque|tarifa|juros|servi[cç]o|assinatura|mensalidade|lan[cç]amento|pix\\s+enviado|pix\\s+para|transfer[eê]ncia)\b')
 def parse_pdf_text_to_transactions(text: str) -> List[Dict]:
-    out = []
-    if not text or len(text) < 10:
-        return out
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    prev_line = ""
-    for ln in lines:
-        if _PDF_SKIP_LINE.search(ln):
-            prev_line = ln
-            continue
-        amounts = []
-        for m in _AMOUNT_RE.finditer(ln):
-            sign = m.group(1) or ""
-            raw = m.group(2)
-            val = parse_value(raw)
-            if val is None:
-                continue
-            if not re.search(r'[.,]\d{2}\b', raw):
-                continue
-            idx = m.start()
-            pre = ln[max(0, idx - 3):idx]
-            if '/' in pre and (len(raw) == 4 or len(raw) == 2):
-                continue
-            neg = ('-' in sign) or ('(' in sign and ')' in sign)
-            amounts.append((val, neg))
-        if not amounts:
-            prev_line = ln
-            continue
-        amounts = [(v, n) for (v, n) in amounts if v and v > 0]
-        if not amounts:
-            prev_line = ln
-            continue
-        val, neg = amounts[-1]
-        tipo = '0'
-        if neg:
-            tipo = '0'
-        else:
-            if _INCOME_HINT.search(ln) and not _EXPENSE_HINT.search(ln):
-                tipo = '1'
-            elif _EXPENSE_HINT.search(ln) and not _INCOME_HINT.search(ln):
-                tipo = '0'
-            else:
-                tipo = '0'
-        desc = re.sub(r'(?:R?\$?\s*)?\(?-?\s*\)?(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+[.,]\d{2}|\d+)\b', ' ', ln)
-        desc = re.sub(r'\s{2,}', ' ', desc).strip()
-        if (not desc or re.fullmatch(r'[RrSs\\$ ]*', desc or '')) and prev_line and not _PDF_SKIP_LINE.search(prev_line):
-            desc = re.sub(r'(?:R?\$?\s*)?\(?-?\s*\)?(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+[.,]\d{2}|\d+)\b', ' ', prev_line or '')
-            desc = re.sub(r'\s{2,}', ' ', desc).strip()
-        if (not desc or re.fullmatch(r'[RrSs\\$ ]*', desc or '')) and prev_line and _PDF_SKIP_LINE.search(prev_line):
-            prev_line = ln
-            continue
-        categoria = detect_category(desc or '', None)
-        desc_nat = naturalize_description(tipo, categoria, desc)
-        out.append({
-            "tipo": tipo,
-            "valor": float(val),
-            "categoria": categoria,
-            "descricao": desc_nat,
-            "moeda": "BRL",
-        })
-        prev_line = ln
-    return out
+    return []
 
 def _dedup_transacoes(items: List[Dict]) -> List[Dict]:
     d = {}
@@ -204,17 +145,14 @@ def _dedup_transacoes(items: List[Dict]) -> List[Dict]:
         tipo_n = str(item.get('tipo')).strip()
         valor_n = float(item.get('valor', 0))
         desc_raw = str(item.get('descricao', ''))
-        desc_n = clean_desc(desc_raw)
         cat_n = str(item.get('categoria', '')).strip().lower()
-        if not cat_n or cat_n == 'outros':
-            try:
-                cat_n = detect_category(desc_n or '')
-            except:
-                pass
-        desc_final = naturalize_description(tipo_n, cat_n, desc_n)
+        desc_final = re.sub(r'\s+', ' ', desc_raw).strip()
+        toks = desc_final.split()
+        if len(toks) > 8:
+            desc_final = ' '.join(toks[:8])
         k = (tipo_n, valor_n, cat_n)
         cur = d.get(k)
-        if cur is None or natural_score(desc_final) > natural_score(str(cur.get('descricao', ''))) or (natural_score(desc_final) == natural_score(str(cur.get('descricao', ''))) and len(desc_final) <= len(str(cur.get('descricao', '')))):
+        if cur is None or len(desc_final) < len(str(cur.get('descricao', ''))):
             novo = dict(item)
             novo['descricao'] = desc_final
             novo['categoria'] = cat_n
@@ -225,10 +163,13 @@ def _try_gemini_transacoes(texto: str) -> Optional[List[Dict]]:
     if not texto or len(texto) < 20:
         return None
     prompt = (
-        "Extraia transações financeiras do texto a seguir.\n"
-        "Responda em JSON com uma lista 'transacoes', cada item contendo:\n"
-        "{tipo: '0' para despesa, '1' para receita, valor: number, descricao: string, categoria: string}.\n"
-        "Texto:\n" + texto[:20000]
+        "Analise o conteúdo textual extraído do PDF (comprovantes, faturas, extratos) e extraia TODAS as transações financeiras.\n"
+        "Retorne um objeto JSON com a chave 'transacoes' contendo uma lista de itens com:\n"
+        "{ tipo: '0' para despesa, '1' para receita, valor: número, descricao: frase profissional (3–8 palavras), categoria: uma categoria específica }\n"
+        "Diretrizes: evite 'outros' ao máximo; use categorias lógicas; padronize descrições; reformule termos informais.\n"
+        "Exemplos: 'feira' → categoria 'alimentacao' e descricao 'Feira'; 'supermercado' → categoria 'alimentacao' e descricao 'Supermercado'; "
+        "'mandei pro cara do uber' → categoria 'transporte' e descricao 'Transporte por Aplicativo'.\n"
+        "Entrada:\n" + texto[:20000]
     )
     try:
         out = ds_generate(prompt, temperature=0.0, max_tokens=800, timeout=25, system_instruction="Responda apenas JSON com chave 'transacoes'.") or ""
@@ -293,12 +234,7 @@ def extrair_transacoes_de_pdf(path: Optional[str] = None, data: Optional[bytes] 
     trans_gemini = _try_gemini_transacoes(txt)
     if trans_gemini:
         return _dedup_transacoes(trans_gemini)
-    # PDF-heurística dedicada
-    base_pdf = parse_pdf_text_to_transactions(txt) or []
-    if base_pdf:
-        return _dedup_transacoes(base_pdf)
-    base = parse_text_to_transactions(txt) or []
-    return _dedup_transacoes(base)
+    return []
 
 _TOT_PATTERNS = [
     re.compile(r'(?i)total\s+a\s+pagar\s*[:\-]?\s*(?:R?\$|\bRM\b)?\s*(\d{1,3}(?:[.\s]\d{3})*(?:,\d{2})|\d+[.,]\d{2})'),
