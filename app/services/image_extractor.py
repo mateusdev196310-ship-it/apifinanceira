@@ -12,6 +12,9 @@ from google.genai import types
 from app.services.extractor import extrair_informacoes_financeiras
 from app.services.rule_based import detect_category, clean_desc, naturalize_description, detect_category_with_confidence
 from app.services.deepseek import generate_json as ds_generate
+import hashlib
+_EASYOCR_READER = None
+_OCR_CACHE = {}
 
 def _infer_fields(tl: str, tp: str):
     s = (tl or "").lower()
@@ -116,15 +119,28 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
         contents_ocr = _contents("Transcreva apenas o texto do comprovante/recibo. Retorne somente o texto puro.", blob)
         transcrito = (transcrito_override or "").strip()
         if not transcrito:
+            key = hashlib.sha256(dados).hexdigest()
+            cached = _OCR_CACHE.get(key)
+            if isinstance(cached, str) and cached.strip():
+                transcrito = cached.strip()
+        if not transcrito:
             try:
                 img = Image.open(io.BytesIO(dados)).convert("RGB")
                 arr = np.array(img)
                 import easyocr
-                reader = easyocr.Reader(['pt', 'en'], gpu=False)
+                global _EASYOCR_READER
+                if _EASYOCR_READER is None:
+                    _EASYOCR_READER = easyocr.Reader(['pt', 'en'], gpu=False)
+                reader = _EASYOCR_READER
                 res = reader.readtext(arr, detail=0)
                 transcrito = "\n".join([str(x) for x in res if str(x).strip()])
             except:
                 transcrito = ""
+            try:
+                if transcrito.strip():
+                    _OCR_CACHE[key] = transcrito.strip()
+            except:
+                pass
         if not transcrito:
             try:
                 b64 = base64.b64encode(dados).decode('ascii')
@@ -139,7 +155,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                         "scale": "true",
                         "OCREngine": "2",
                     },
-                    timeout=20
+                    timeout=6
                 )
                 if r.ok:
                     j = r.json()
@@ -162,7 +178,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                                     "scale": "true",
                                     "OCREngine": "2",
                                 },
-                                timeout=20
+                                timeout=6
                             )
                             if r2.ok:
                                 j2 = r2.json()
@@ -198,7 +214,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                                         "scale": "true",
                                         "OCREngine": "2",
                                     },
-                                    timeout=20
+                                    timeout=6
                                 )
                                 if r2.ok:
                                     j2 = r2.json()
@@ -334,33 +350,15 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             f"{transcrito}"
         )
         try:
-            if client is not None:
-                contents_map = _contents(prompt_json, None)
-                map_json = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=contents_map,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0,
-                        max_output_tokens=800,
-                    ),
-                )
-                texto2 = (map_json.text or "").strip()
-            else:
-                texto2 = ""
+            texto2 = ds_generate(
+                prompt_json,
+                temperature=0.0,
+                max_tokens=800,
+                timeout=2,
+                system_instruction="Retorne apenas um ARRAY JSON conforme solicitado."
+            ) or ""
         except:
             texto2 = ""
-        if not texto2:
-            try:
-                texto2 = ds_generate(
-                    prompt_json,
-                    temperature=0.0,
-                    max_tokens=800,
-                    timeout=20,
-                    system_instruction="Retorne apenas um ARRAY JSON conforme solicitado."
-                ) or ""
-            except:
-                texto2 = ""
         try:
             dados_lista2 = json.loads(texto2)
         except:

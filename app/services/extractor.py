@@ -1,5 +1,7 @@
 import re
 import json
+import time
+import threading
 from app.services.deepseek import generate_json as ds_generate
 from app.services.gemini import get_client, set_cooldown
 from app.constants.categories import CATEGORY_LIST
@@ -448,11 +450,46 @@ def extrair_informacoes_financeiras(texto_usuario):
     '''
     try:
         ai_resultados = []
+        done = threading.Event()
         try:
             client = get_client()
         except:
             client = None
-        if client is not None:
+        def _norm_list(dados_lista):
+            normalizados = []
+            for item in dados_lista:
+                try:
+                    if 'valor' in item:
+                        item['valor'] = float(item['valor'])
+                    tipo_n = str(item.get('tipo')).strip()
+                    cat_n = str(item.get('categoria', '')).strip().lower()
+                    desc_raw = str(item.get('descricao', ''))
+                    desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
+                    desc_final = re.sub(r'\s+', ' ', desc_final).strip()
+                    toks = desc_final.split()
+                    if len(toks) > 6:
+                        desc_final = ' '.join(toks[:6])
+                    item['descricao'] = desc_final
+                    normalizados.append(item)
+                except:
+                    continue
+            dedup = {}
+            for item in normalizados:
+                try:
+                    tipo_n = str(item.get('tipo')).strip()
+                    valor_n = float(item.get('valor', 0))
+                    cat_n = str(item.get('categoria', '')).strip().lower()
+                    k = (tipo_n, valor_n, cat_n)
+                    cur = dedup.get(k)
+                    if cur is None or len(str(item.get('descricao', ''))) < len(str(cur.get('descricao', ''))):
+                        dedup[k] = item
+                except:
+                    continue
+            return list(dedup.values())
+        def _gemini_call():
+            nonlocal ai_resultados
+            if client is None:
+                return
             try:
                 resposta = client.models.generate_content(
                     model='gemini-2.5-flash',
@@ -466,30 +503,7 @@ def extrair_informacoes_financeiras(texto_usuario):
                 try:
                     dados_lista = json.loads(resposta_texto)
                     if isinstance(dados_lista, list):
-                        normalizados = []
-                        for item in dados_lista:
-                            if 'valor' in item:
-                                item['valor'] = float(item['valor'])
-                            tipo_n = str(item.get('tipo')).strip()
-                            cat_n = str(item.get('categoria', '')).strip().lower()
-                            desc_raw = str(item.get('descricao', ''))
-                            desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
-                            desc_final = re.sub(r'\s+', ' ', desc_final).strip()
-                            toks = desc_final.split()
-                            if len(toks) > 6:
-                                desc_final = ' '.join(toks[:6])
-                            item['descricao'] = desc_final
-                            normalizados.append(item)
-                        dedup = {}
-                        for item in normalizados:
-                            tipo_n = str(item.get('tipo')).strip()
-                            valor_n = float(item.get('valor', 0))
-                            cat_n = str(item.get('categoria', '')).strip().lower()
-                            k = (tipo_n, valor_n, cat_n)
-                            cur = dedup.get(k)
-                            if cur is None or len(str(item.get('descricao', ''))) < len(str(cur.get('descricao', ''))):
-                                dedup[k] = item
-                        ai_resultados = list(dedup.values())
+                        ai_resultados = _norm_list(dados_lista)
                     elif isinstance(dados_lista, dict):
                         if 'valor' in dados_lista:
                             dados_lista['valor'] = float(dados_lista['valor'])
@@ -505,6 +519,8 @@ def extrair_informacoes_financeiras(texto_usuario):
                         ai_resultados = [dados_lista]
                 except:
                     ai_resultados = []
+                if ai_resultados:
+                    done.set()
             except Exception as e:
                 try:
                     msg = str(e) if e else ""
@@ -514,18 +530,16 @@ def extrair_informacoes_financeiras(texto_usuario):
                             set_cooldown(int(os.getenv("GEMINI_COOLDOWN_SECONDS", "900") or "900"))
                         except:
                             set_cooldown(900)
-                    else:
-                        pass
                 except:
                     pass
-                ai_resultados = []
-        if not ai_resultados:
+        def _deepseek_call():
+            nonlocal ai_resultados
             try:
                 resposta_texto = ds_generate(
                     prompt,
                     temperature=0.1,
                     max_tokens=512,
-                    timeout=25,
+                    timeout=2,
                     system_instruction="Você é um extrator financeiro PT-BR. Retorne somente JSON válido sem textos extras."
                 ) or ""
                 resposta_texto = resposta_texto.replace('```json', '').replace('```', '').strip()
@@ -535,30 +549,7 @@ def extrair_informacoes_financeiras(texto_usuario):
                 try:
                     dados_lista = json.loads(resposta_texto)
                     if isinstance(dados_lista, list):
-                        normalizados = []
-                        for item in dados_lista:
-                            if 'valor' in item:
-                                item['valor'] = float(item['valor'])
-                            tipo_n = str(item.get('tipo')).strip()
-                            cat_n = str(item.get('categoria', '')).strip().lower()
-                            desc_raw = str(item.get('descricao', ''))
-                            desc_final = desc_raw if natural_score(desc_raw) >= 2 else naturalize_description(tipo_n, cat_n, desc_raw)
-                            desc_final = re.sub(r'\s+', ' ', desc_final).strip()
-                            toks = desc_final.split()
-                            if len(toks) > 6:
-                                desc_final = ' '.join(toks[:6])
-                            item['descricao'] = desc_final
-                            normalizados.append(item)
-                        dedup = {}
-                        for item in normalizados:
-                            tipo_n = str(item.get('tipo')).strip()
-                            valor_n = float(item.get('valor', 0))
-                            cat_n = str(item.get('categoria', '')).strip().lower()
-                            k = (tipo_n, valor_n, cat_n)
-                            cur = dedup.get(k)
-                            if cur is None or len(str(item.get('descricao', ''))) < len(str(cur.get('descricao', ''))):
-                                dedup[k] = item
-                        ai_resultados = list(dedup.values())
+                        ai_resultados = _norm_list(dados_lista)
                     elif isinstance(dados_lista, dict):
                         if 'valor' in dados_lista:
                             dados_lista['valor'] = float(dados_lista['valor'])
@@ -574,18 +565,22 @@ def extrair_informacoes_financeiras(texto_usuario):
                         ai_resultados = [dados_lista]
                 except:
                     ai_resultados = []
+                if ai_resultados:
+                    done.set()
             except:
-                ai_resultados = []
+                pass
+        th_ds = threading.Thread(target=_deepseek_call, daemon=True)
+        th_ds.start()
+        if client is not None:
+            th_ge = threading.Thread(target=_gemini_call, daemon=True)
+            th_ge.start()
+        done.wait(2.0)
         if not ai_resultados:
             try:
                 rb = parse_text_to_transactions(texto_usuario)
             except:
                 rb = []
             if rb:
-                try:
-                    print(f"[extrair_informacoes_financeiras] fonte=local-regra qtd={len(rb)}")
-                except:
-                    pass
                 return rb
         if ai_resultados:
             try:
@@ -600,10 +595,6 @@ def extrair_informacoes_financeiras(texto_usuario):
                         it["confidence_score"] = 0.9
                     out2.append(it)
                 ai_resultados = out2
-            except:
-                pass
-            try:
-                print(f"[extrair_informacoes_financeiras] fonte=ia qtd={len(ai_resultados)}")
             except:
                 pass
             return ai_resultados
