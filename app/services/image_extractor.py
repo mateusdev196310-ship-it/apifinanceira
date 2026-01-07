@@ -316,113 +316,6 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                 except:
                     pass
         tl0 = transcrito.lower()
-        def _best_valor(tl: str):
-            lines = [x.strip().lower() for x in (tl or "").splitlines() if str(x).strip()]
-            prox_pix = set()
-            for i, ln in enumerate(lines):
-                if 'pix' in ln:
-                    prox_pix.add(i)
-                    if i > 0:
-                        prox_pix.add(i - 1)
-                    if i + 1 < len(lines):
-                        prox_pix.add(i + 1)
-            pat_money = r'(?:r\$\s*)?(\d{1,3}(?:[.\s\u00a0]\d{3})*,\d{2}|\d+,\d{2}|\d+\.\d{2})'
-            res = []
-            for i, ln in enumerate(lines):
-                if re.search(r'cnpj|cpf', ln, re.IGNORECASE):
-                    continue
-                for m in re.finditer(pat_money, ln, re.IGNORECASE):
-                    try:
-                        raw = m.group(1)
-                        if ',' in raw:
-                            val = float(raw.replace('.', '').replace(',', '.'))
-                        else:
-                            val = float(raw)
-                        score = 0
-                        if 'pix' in ln:
-                            score += 5
-                        if i in prox_pix:
-                            score += 3
-                        if re.search(r'\bvalor\b|\btotal\b|\bpagamento\b|\bpago\b', ln, re.IGNORECASE):
-                            score += 3
-                        if 'r$' in ln:
-                            score += 2
-                        if ',' in raw:
-                            score += 1
-                        res.append((val, score, i))
-                    except:
-                        continue
-            if not res:
-                return None
-            res.sort(key=lambda x: (x[1], x[2]), reverse=True)
-            return res[0][0]
-        v0 = _best_valor(tl0)
-        if v0 is not None:
-            tipo0 = '0'
-            if re.search(r'\b(recebi|recebido|recebimento)\b', tl0, re.IGNORECASE) or 'pix recebido' in tl0 or 'credito na conta' in tl0 or 'crédito na conta' in tl0 or 'deposito' in tl0 or 'depósito' in tl0:
-                tipo0 = '1'
-            tl0_san = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', tl0, flags=re.IGNORECASE)
-            tl0_san = re.sub(r'\binternet\s+banking\b', '', tl0_san, flags=re.IGNORECASE)
-            cat0, conf0 = detect_category_with_confidence(clean_desc(tl0_san))
-            if tipo0 == '0' and cat0 == 'vendas':
-                cat0 = 'outros'
-            def _nat0(tl, tp, ct):
-                s = tl or ""
-                m = re.search(r'\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\\s]{0,20})', s, re.IGNORECASE)
-                if m:
-                    return f"{m.group(1)} {m.group(2)}".strip()
-                if tp == '1':
-                    if re.search(r'sal[áa]ri', s):
-                        return 'salário'
-                    if re.search(r'vend', s):
-                        return 'vendas'
-                    if re.search(r'\bpix\b', s, re.IGNORECASE) or 'depósito' in s or 'deposito' in s:
-                        return 'pix recebido'
-                    return 'receita'
-                else:
-                    if re.search(r'\bpix\b', s, re.IGNORECASE):
-                        return 'pix'
-                    if re.search(r'\btransfer\w*\b', s, re.IGNORECASE):
-                        return 'transferência'
-                    if re.search(r'\bcart[ãa]o\b|\bcr[eé]dito\b|\bd[ée]bito\b', s, re.IGNORECASE):
-                        return 'cartão'
-                    if re.search(r'\bboleto\b', s, re.IGNORECASE):
-                        return 'boleto'
-                    if re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
-                        return 'mercado'
-                    if re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
-                        return 'farmácia'
-                    if re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
-                        return 'restaurante'
-                    if re.search(r'\buber\b', s, re.IGNORECASE):
-                        return 'uber'
-                    if re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
-                        return 'combustível'
-                    if re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
-                        return 'internet'
-                    if re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
-                        return 'moradia'
-                    return ct or 'outros'
-            base0 = _nat0(tl0, tipo0, cat0)
-            desc0 = naturalize_description(tipo0, cat0, base0)
-            try:
-                print("[image_extractor] regex_fallback_hit")
-            except:
-                pass
-            fctx = _infer_fields(transcrito, tipo0)
-            return [{
-                "tipo": tipo0,
-                "valor": float(v0),
-                "categoria": cat0,
-                "descricao": desc0,
-                "moeda": "BRL",
-                "metodo_pagamento": fctx.get("metodo_pagamento", ""),
-                "estabelecimento": fctx.get("estabelecimento", ""),
-                "recebedor": fctx.get("recebedor", ""),
-                "data_transacao": fctx.get("data_transacao", ""),
-                "confidence_score": float(conf0),
-                "pendente_confirmacao": (cat0 == 'outros') or (float(conf0) < 0.9),
-            }]
  
         prompt_json = (
             "Com base no TEXTO transcrito do comprovante abaixo, extraia transações financeiras e retorne SOMENTE um ARRAY JSON:\n"
@@ -441,17 +334,7 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
             f"{transcrito}"
         )
         try:
-            texto2 = ds_generate(
-                prompt_json,
-                temperature=0.0,
-                max_tokens=800,
-                timeout=20,
-                system_instruction="Retorne apenas um ARRAY JSON conforme solicitado."
-            ) or ""
-        except:
-            texto2 = ""
-        if not texto2 and client is not None:
-            try:
+            if client is not None:
                 contents_map = _contents(prompt_json, None)
                 map_json = client.models.generate_content(
                     model='gemini-2.5-flash',
@@ -463,6 +346,19 @@ def extrair_informacoes_da_imagem(image_bytes: bytes, transcrito_override: str =
                     ),
                 )
                 texto2 = (map_json.text or "").strip()
+            else:
+                texto2 = ""
+        except:
+            texto2 = ""
+        if not texto2:
+            try:
+                texto2 = ds_generate(
+                    prompt_json,
+                    temperature=0.0,
+                    max_tokens=800,
+                    timeout=20,
+                    system_instruction="Retorne apenas um ARRAY JSON conforme solicitado."
+                ) or ""
             except:
                 texto2 = ""
         try:

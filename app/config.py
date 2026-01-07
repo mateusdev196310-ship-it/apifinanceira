@@ -36,3 +36,5 @@ def api_url():
     if API_URL_OVERRIDE:
         return API_URL_OVERRIDE
     return f"http://{API_HOST}:{API_PORT}"
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_COOLDOWN_SECONDS = int(os.getenv("DEEPSEEK_COOLDOWN_SECONDS", "900"))

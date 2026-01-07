@@ -45,7 +45,7 @@ def generate_json(prompt: str, temperature: float = 0.1, max_tokens: int = 800, 
         if headers is None:
             return None
         body = {
-            "model": os.getenv("DEEPSEEK_MODEL") or "deepseek-chat",
+            "model": "deepseek-chat",
             "messages": [
                 {"role": "system", "content": system_instruction or "Responda em JSON válido sem texto extra."},
                 {"role": "user", "content": prompt},
@@ -53,7 +53,8 @@ def generate_json(prompt: str, temperature: float = 0.1, max_tokens: int = 800, 
             "temperature": float(temperature or 0.1),
             "max_tokens": int(max_tokens or 800),
         }
-        r = _req.post("https://api.deepseek.com/chat/completions", headers=headers, json=body, timeout=timeout)
+        body["stream"] = False
+        r = _req.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=body, timeout=timeout)
         if not getattr(r, "ok", False):
             try:
                 if r.status_code == 429:

@@ -3,7 +3,7 @@ import io
 import re
 import json
 from typing import List, Dict, Optional, Tuple, Union
-from app.services.rule_based import parse_value
+from app.services.rule_based import parse_value, detect_category_with_confidence, clean_desc, naturalize_description
 from app.services.deepseek import generate_json as ds_generate
 from app.services.gemini import get_client
 from google.genai import types
@@ -137,7 +137,77 @@ _AMOUNT_RE = re.compile(r'(?:R?\$?\s*)?(\(?-?\s*\)?)?(\d{1,3}(?:[.\s]\d{3})*(?:,
 _INCOME_HINT = re.compile(r'(?i)\b(recebi|recebido|recebimento|credito|cr[eé]dito|dep[óo]sito|entrada|sal[áa]rio|pix\\s+recebido|transfer[eê]ncia\\s+recebida)\b')
 _EXPENSE_HINT = re.compile(r'(?i)\b(d[eé]bito|debito|compra|pagamento|fatura|boleto|saque|tarifa|juros|servi[cç]o|assinatura|mensalidade|lan[cç]amento|pix\\s+enviado|pix\\s+para|transfer[eê]ncia)\b')
 def parse_pdf_text_to_transactions(text: str) -> List[Dict]:
-    return []
+    if not text or len(text) < 20:
+        return []
+    lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
+    out = []
+    for i, ln in enumerate(lines):
+        if _PDF_SKIP_LINE.search(ln):
+            continue
+        for m in _AMOUNT_RE.finditer(ln):
+            raw = m.group(2)
+            val = parse_value(raw)
+            if val is None:
+                continue
+            tipo = '0'
+            ctx_prev = lines[i - 1] if i > 0 else ""
+            ctx_next = lines[i + 1] if (i + 1) < len(lines) else ""
+            if _INCOME_HINT.search(ln) or _INCOME_HINT.search(ctx_prev) or _INCOME_HINT.search(ctx_next):
+                tipo = '1'
+            elif _EXPENSE_HINT.search(ln) or _EXPENSE_HINT.search(ctx_prev) or _EXPENSE_HINT.search(ctx_next):
+                tipo = '0'
+            tl_san = re.sub(r'assinatura\s+eletr[ôo]nica|assinatura\s+digital', '', ln, flags=re.IGNORECASE)
+            tl_san = re.sub(r'\binternet\s+banking\b', '', tl_san, flags=re.IGNORECASE)
+            cat, _ = detect_category_with_confidence(clean_desc(tl_san))
+            s = (ln or "").lower()
+            base = ""
+            mm = re.search(r'\b(mercado|supermercado|farmacia|farmácia|restaurante|padaria|loja|posto)\b\s+([a-z0-9\u00c0-\u017f][a-z0-9\u00c0-\u017f\s]{0,20})', s, re.IGNORECASE)
+            if mm:
+                base = f"{mm.group(1)} {mm.group(2)}".strip()
+            else:
+                if tipo == '1':
+                    if re.search(r'sal[áa]ri', s):
+                        base = 'salário'
+                    elif re.search(r'vend', s):
+                        base = 'vendas'
+                    elif re.search(r'\bpix\b', s, re.IGNORECASE) or 'depósito' in s or 'deposito' in s:
+                        base = 'pix recebido'
+                    else:
+                        base = 'receita'
+                else:
+                    if re.search(r'\bpix\b', s, re.IGNORECASE):
+                        base = 'pix'
+                    elif re.search(r'\btransfer\w*\b', s, re.IGNORECASE):
+                        base = 'transferência'
+                    elif re.search(r'\bcart[ãa]o\b|\bcr[eé]dito\b|\bd[ée]bito\b', s, re.IGNORECASE):
+                        base = 'cartão'
+                    elif re.search(r'\bboleto\b', s, re.IGNORECASE):
+                        base = 'boleto'
+                    elif re.search(r'\bmercado\b|\bsupermercado\b', s, re.IGNORECASE):
+                        base = 'mercado'
+                    elif re.search(r'\bfarm[áa]cia\b', s, re.IGNORECASE):
+                        base = 'farmácia'
+                    elif re.search(r'\brestaurante\b|\bpizza\b|\blanche\b|\bhamburg\w*\b', s, re.IGNORECASE):
+                        base = 'restaurante'
+                    elif re.search(r'\buber\b', s, re.IGNORECASE):
+                        base = 'uber'
+                    elif re.search(r'\bgasolina\b|\bcombust[ií]vel\b', s, re.IGNORECASE):
+                        base = 'combustível'
+                    elif re.search(r'\binternet\b|\bstreaming\b|\bassinatura\b|\btelefonia\b', s, re.IGNORECASE):
+                        base = 'internet'
+                    elif re.search(r'\baluguel\b|\bcondom[ií]nio\b|\benergia\b|\b[áa]gua\b|\bluz\b', s, re.IGNORECASE):
+                        base = 'moradia'
+                    else:
+                        base = cat or 'outros'
+            desc = naturalize_description(tipo, cat, base)
+            out.append({
+                "tipo": tipo,
+                "valor": float(val),
+                "categoria": str(cat or 'outros').strip().lower() or 'outros',
+                "descricao": desc,
+                "moeda": "BRL",
+            })
+    return out
 
 def _dedup_transacoes(items: List[Dict]) -> List[Dict]:
     d = {}
@@ -234,6 +304,9 @@ def extrair_transacoes_de_pdf(path: Optional[str] = None, data: Optional[bytes] 
     trans_gemini = _try_gemini_transacoes(txt)
     if trans_gemini:
         return _dedup_transacoes(trans_gemini)
+    rb = parse_pdf_text_to_transactions(txt)
+    if rb:
+        return _dedup_transacoes(rb)
     return []
 
 _TOT_PATTERNS = [
