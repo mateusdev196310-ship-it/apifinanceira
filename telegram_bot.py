@@ -523,34 +523,32 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
         agg = {}
         try:
             hoje = _now_sp()
-            dt_ini = hoje - timedelta(days=60)
-            cur = dt_ini
-            while cur <= hoje:
-                dkey = cur.strftime("%Y-%m-%d")
-                try:
-                    dd = root.collection("dias").document(dkey).get().to_dict() or {}
-                except:
-                    dd = {}
-                for k, v in dict(dd.get(campo, {}) or {}).items():
-                    agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
-                cur = cur + timedelta(days=1)
+            mk_cur = _month_key_sp()
+            # calcular mês anterior
+            prev = hoje.replace(day=1) - timedelta(days=1)
+            mk_prev = prev.strftime("%Y-%m")
+            mm_cur = root.collection("meses").document(mk_cur).get().to_dict() or {}
+            mm_prev = root.collection("meses").document(mk_prev).get().to_dict() or {}
+            for k, v in dict(mm_cur.get(campo, {}) or {}).items():
+                agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+            for k, v in dict(mm_prev.get(campo, {}) or {}).items():
+                agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
         except:
             try:
-                for mdoc in root.collection("meses").stream():
-                    mo = mdoc.to_dict() or {}
-                    for k, v in dict(mo.get(campo, {}) or {}).items():
-                        agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
-            except:
                 mm = root.collection("meses").document(_month_key_sp()).get().to_dict() or {}
                 for k, v in dict(mm.get(campo, {}) or {}).items():
                     agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+            except:
+                pass
         items = sorted(((k, float(v or 0)) for k, v in agg.items()), key=lambda x: (-x[1], x[0]))
         lst = [k for k, _ in items if k not in ("duvida", "outros")]
+        if not lst:
+            lst = ["alimentacao", "transporte", "saude"]
         top = lst[:limit]
         _cache_set(cache_key, top, ttl=60)
         return top
     except:
-        return []
+        return ["alimentacao", "transporte", "saude"][:limit]
 def _categoria_keyboard(ref_id: str, tipo: str, chat_id: str):
     base_prior = ["alimentacao", "transporte", "saude"]
     usados = _top_categorias_cliente(chat_id, tipo, limit=9)
