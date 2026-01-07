@@ -512,9 +512,14 @@ def _map_text_to_category(texto: str) -> str:
     return "outros"
 def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
     try:
+        tipo_norm = "entrada" if str(tipo).strip().lower() in ("entrada", "1", "receita") else "saida"
+        cache_key = f"topcats60:{cliente_id}:{tipo_norm}"
+        cached = _cache_get(cache_key)
+        if isinstance(cached, list) and cached:
+            return cached[:limit]
         db = get_db()
         root = db.collection("clientes").document(str(cliente_id))
-        campo = "categorias_entrada" if str(tipo).strip().lower() in ("entrada", "1", "receita") else "categorias_saida"
+        campo = "categorias_entrada" if tipo_norm == "entrada" else "categorias_saida"
         agg = {}
         try:
             hoje = _now_sp()
@@ -541,7 +546,9 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
                     agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
         items = sorted(((k, float(v or 0)) for k, v in agg.items()), key=lambda x: (-x[1], x[0]))
         lst = [k for k, _ in items if k not in ("duvida", "outros")]
-        return lst[:limit]
+        top = lst[:limit]
+        _cache_set(cache_key, top, ttl=60)
+        return top
     except:
         return []
 def _categoria_keyboard(ref_id: str, tipo: str, chat_id: str):
