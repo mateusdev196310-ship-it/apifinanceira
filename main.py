@@ -63,7 +63,10 @@ def _ensure_month_consistency(cliente_id: str, mes_atual: str):
     tr = float(tmm.get("total_entrada", mm_doc.get("total_entrada", 0)) or 0)
     taj = float(tmm.get("total_ajuste", mm_doc.get("total_ajuste", 0)) or 0)
     tes = float(tmm.get("total_estorno", mm_doc.get("total_estorno", 0)) or 0)
-    saldo = float(mm_doc.get("saldo_mes", (tr - td + taj)) or (tr - td + taj))
+    try:
+        saldo = float((tmm.get("saldo_mes") if (tmm.get("saldo_mes") is not None) else mm_doc.get("saldo_mes")))
+    except Exception:
+        saldo = (tr - td + tes + taj)
     try:
         if (td + tr + taj + tes) > 0 and mm_doc.get("saldo_mes") is not None:
             return
@@ -92,7 +95,7 @@ def _ensure_month_consistency(cliente_id: str, mes_atual: str):
         except Exception:
             pass
         cur = cur + timedelta(days=1)
-    s_saldo = s_tr - s_td + s_taj
+    s_saldo = s_tr - s_td + s_tes + s_taj
     need_fix = False
     try:
         if abs(s_td - td) > 1e-6 or abs(s_tr - tr) > 1e-6 or abs(s_taj - taj) > 1e-6 or abs(s_tes - tes) > 1e-6 or abs(s_saldo - saldo) > 1e-6:
@@ -101,11 +104,13 @@ def _ensure_month_consistency(cliente_id: str, mes_atual: str):
         need_fix = True
     try:
         mm = {
-            "total_entrada": float(s_tr or 0),
-            "total_saida": float(s_td or 0),
-            "total_ajuste": float(s_taj or 0),
-            "total_estorno": float(s_tes or 0),
-            "saldo_mes": float(s_saldo or 0),
+            "totais_mes": {
+                "total_entrada": float(s_tr or 0),
+                "total_saida": float(s_td or 0),
+                "total_ajuste": float(s_taj or 0),
+                "total_estorno": float(s_tes or 0),
+                "saldo_mes": float(s_saldo or 0),
+            },
             "quantidade_transacoes_validas": int(qv_sum or 0),
             "atualizado_em": firestore.SERVER_TIMESTAMP,
         }

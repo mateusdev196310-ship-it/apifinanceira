@@ -1338,9 +1338,9 @@ def extrato_hoje():
         ajustes = float(td["ajuste"])
         estornos = float(td["estorno"])
         try:
-            saldo = float(dd.get("saldo_dia")) if dd.get("saldo_dia") is not None else (receitas - despesas + ajustes)
+            saldo = float(td["saldo"])
         except:
-            saldo = receitas - despesas + ajustes
+            saldo = receitas - despesas + estornos + ajustes
         need_fallback = False
         try:
             need_fallback = (despesas == 0.0 and receitas == 0.0 and ajustes == 0.0 and estornos == 0.0)
@@ -1369,7 +1369,7 @@ def extrato_hoje():
             receitas = float(tr or 0)
             ajustes = float(taj or 0)
             estornos = float(tes or 0)
-            saldo = receitas - despesas + ajustes
+            saldo = receitas - despesas + estornos + ajustes
             try:
                 root.collection('dias').document(data_atual).set({
                     "totais_dia": {

@@ -541,7 +541,7 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
             return cached[:limit]
         db = get_db()
         root = db.collection("clientes").document(str(cliente_id))
-        campo = "categorias_entrada" if tipo_norm == "entrada" else "categorias_saida"
+        campo = "entrada" if tipo_norm == "entrada" else "saida"
         agg = {}
         try:
             hoje = _now_sp()
@@ -551,9 +551,11 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
             mk_prev = prev.strftime("%Y-%m")
             mm_cur = root.collection("meses").document(mk_cur).get().to_dict() or {}
             mm_prev = root.collection("meses").document(mk_prev).get().to_dict() or {}
-            for k, v in dict(mm_cur.get(campo, {}) or {}).items():
+            cur_cats = dict((mm_cur.get("categorias", {}) or {}).get(campo, {}) or {}) or dict(mm_cur.get(f"categorias_{campo}", {}) or {})
+            prev_cats = dict((mm_prev.get("categorias", {}) or {}).get(campo, {}) or {}) or dict(mm_prev.get(f"categorias_{campo}", {}) or {})
+            for k, v in dict(cur_cats or {}).items():
                 agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
-            for k, v in dict(mm_prev.get(campo, {}) or {}).items():
+            for k, v in dict(prev_cats or {}).items():
                 agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
         except:
             try:
