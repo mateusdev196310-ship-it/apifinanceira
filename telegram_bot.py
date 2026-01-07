@@ -2073,31 +2073,12 @@ async def categorias_dia(query, context):
                         receitas_map[cat] = float(receitas_map.get(cat, 0) or 0) + v
             except:
                 pass
-        desp_sorted = sorted(((k, float(v or 0)) for k, v in despesas_map.items()), key=lambda x: -x[1])
-        rec_sorted = sorted(((k, float(v or 0)) for k, v in receitas_map.items()), key=lambda x: -x[1])
+        despesas_map = {k: float(v or 0) for k, v in despesas_map.items() if float(v or 0) > 0}
+        receitas_map = {k: float(v or 0) for k, v in receitas_map.items() if float(v or 0) > 0}
+        desp_sorted = sorted(despesas_map.items(), key=lambda x: -float(x[1]))
+        rec_sorted = sorted(receitas_map.items(), key=lambda x: -float(x[1]))
         resposta = criar_cabecalho("CATEGORIAS DO DIA", 40)
         resposta += f"\n📅 {data_str}\n\n"
-        tot_periodo = extrato_api.get("total", {}) if extrato_api.get("sucesso") else {}
-        tot_despesas = float(tot_periodo.get("despesas", 0) or 0)
-        tot_receitas = float(tot_periodo.get("receitas", 0) or 0)
-        def _pct(v, tot):
-            try:
-                return f"{(float(v or 0) / float(tot or 1)) * 100:.1f}%"
-            except:
-                return "0.0%"
-        for k, lst in ordenadas:
-            pass
-        mapa_desp = {}
-        mapa_rec = {}
-        for k, lst in grupos.items():
-            dd = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'saida')
-            rr = sum(float(it.get('valor', 0) or 0) for it in lst if it.get('tipo') == 'entrada')
-            if dd > 0:
-                mapa_desp[k] = dd
-            if rr > 0:
-                mapa_rec[k] = rr
-        desp_sorted = sorted(mapa_desp.items(), key=lambda x: -x[1])
-        rec_sorted = sorted(mapa_rec.items(), key=lambda x: -x[1])
         labels = [CATEGORY_NAMES.get(k, k) for k, _ in (desp_sorted + rec_sorted)]
         max_label = max((len(x) for x in labels), default=12)
         FS = "\u2007"
@@ -2106,12 +2087,12 @@ async def categorias_dia(query, context):
         resposta += "DESPESAS\n"
         for k, v in desp_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            resposta += f"  {pad(label)}{formatar_moeda(v, negrito=False)}\n"
+            resposta += f"  {pad(label)}{formatar_moeda(float(v or 0), negrito=False)}\n"
         resposta += "\nRECEITAS\n"
         for k, v in rec_sorted:
             label = CATEGORY_NAMES.get(k, k)
-            resposta += f"  {pad(label)}+{formatar_moeda(v, negrito=False)}\n"
-        saldo_dia = float(sum((v for _, v in rec_sorted), 0.0)) - float(sum((v for _, v in desp_sorted), 0.0))
+            resposta += f"  {pad(label)}+{formatar_moeda(float(v or 0), negrito=False)}\n"
+        saldo_dia = float(sum((float(v or 0) for _, v in rec_sorted), 0.0)) - float(sum((float(v or 0) for _, v in desp_sorted), 0.0))
         resposta += f"\nSaldo do dia: {formatar_moeda(saldo_dia, negrito=True)}\n"
         try:
             tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
