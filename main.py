@@ -4,7 +4,7 @@ import sys
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from app.config import TELEGRAM_BOT_TOKEN, API_HOST, API_PORT, GEMINI_API_KEY
+from app.config import TELEGRAM_BOT_TOKEN, API_HOST, API_PORT, GEMINI_API_KEY, DEEPSEEK_API_KEY
 import api_financeira
 import telegram_bot
 import json
@@ -46,8 +46,8 @@ except Exception:
 
 def run_api():
     os.environ["FLASK_SKIP_DOTENV"] = "1"
-    if not GEMINI_API_KEY:
-        print("⚠️ GEMINI_API_KEY não configurada. O endpoint /processar retornará vazio.")
+    if not GEMINI_API_KEY and not DEEPSEEK_API_KEY:
+        print("⚠️ Nenhuma IA configurada (GEMINI_API_KEY/DEEPSEEK_API_KEY). O endpoint /processar retornará vazio.")
     api_financeira.app.run(host=API_HOST, port=API_PORT, debug=True, use_reloader=False)
 def _ensure_month_consistency(cliente_id: str, mes_atual: str):
     if get_db is None:

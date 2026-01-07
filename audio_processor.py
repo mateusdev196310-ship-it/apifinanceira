@@ -168,16 +168,59 @@ class AudioProcessor:
     
     def transcribe_audio_bytes(self, audio_bytes, mime):
         try:
+            # Priorizar STT local: salvar bytes e usar Vosk/Google
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.tmpaudio') as tmp_file:
+                tmp_file.write(audio_bytes)
+                temp_path = tmp_file.name
+            try:
+                # Tentar converter para WAV 16k mono e usar locais
+                ff = self._get_ffmpeg_exe()
+                out_path = temp_path + '.wav'
+                try:
+                    if ff:
+                        subprocess.run([ff, '-y', '-i', temp_path, '-ar', '16000', '-ac', '1', out_path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except:
+                    out_path = temp_path
+                try:
+                    if self.recognizer is not None:
+                        with sr.AudioFile(out_path) as source:
+                            self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                            audio_data = self.recognizer.record(source)
+                            texto = None
+                            try:
+                                texto = self.recognizer.recognize_google(audio_data, language='pt-BR', show_all=False)
+                            except:
+                                texto = None
+                            if not texto:
+                                try:
+                                    vtxt = self.transcribe_wav_with_vosk(out_path)
+                                except Exception:
+                                    vtxt = None
+                                if vtxt:
+                                    return vtxt
+                            if texto:
+                                return texto
+                except:
+                    pass
+            finally:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                    if os.path.exists(out_path):
+                        os.remove(out_path)
+                except:
+                    pass
+            # Fallback: Gemini
             try:
                 client = get_client()
             except:
                 client = None
             if client is not None:
-                blob = types.Blob(mime_type=mime, data=audio_bytes)
-                parts = [types.Part(text="Transcreva o áudio para texto em português do Brasil. Retorne apenas o texto transcrito.")]
-                parts.append(types.Part(inline_data=blob))
-                contents = [types.Content(role='user', parts=parts)]
                 try:
+                    blob = types.Blob(mime_type=mime, data=audio_bytes)
+                    parts = [types.Part(text="Transcreva o áudio para texto em português do Brasil. Retorne apenas o texto transcrito.")]
+                    parts.append(types.Part(inline_data=blob))
+                    contents = [types.Content(role='user', parts=parts)]
                     resp = client.models.generate_content(
                         model='gemini-2.5-flash',
                         contents=contents,
@@ -198,9 +241,6 @@ class AudioProcessor:
                         except:
                             set_cooldown(900)
                         self.rate_limited = True
-                        return None
-                    if ("404" in msg) or ("Not Found" in msg):
-                        self.rate_limited = False
                         return None
                     self.rate_limited = False
                     return None
@@ -252,13 +292,6 @@ class AudioProcessor:
             except:
                 pass
             if format == 'wav':
-                t_ai0 = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
-                try:
-                    print("[audio_processor] gemini_len", len(t_ai0 or ""))
-                except:
-                    pass
-                if t_ai0:
-                    return t_ai0
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
                     tmp_file.write(audio_bytes)
                     temp_path = tmp_file.name
@@ -303,25 +336,12 @@ class AudioProcessor:
                         os.remove(temp_path)
                     except:
                         pass
+                # Fallback IA
+                t_ai0 = self.transcribe_audio_bytes(audio_bytes, 'audio/wav')
+                if t_ai0:
+                    return t_ai0
                 return None
             if format in ('ogg', 'oga', 'opus', 'mp3', 'mpeg', 'm4a', 'aac'):
-                if format in ('ogg', 'oga', 'opus'):
-                    mime0 = 'audio/ogg'
-                elif format in ('mp3', 'mpeg'):
-                    mime0 = 'audio/mpeg'
-                elif format == 'm4a':
-                    mime0 = 'audio/mp4'
-                elif format == 'aac':
-                    mime0 = 'audio/aac'
-                else:
-                    mime0 = 'audio/mpeg'
-                t_ai1 = self.transcribe_audio_bytes(audio_bytes, mime0)
-                if t_ai1:
-                    try:
-                        print("[audio_processor] gemini_len", len(t_ai1 or ""))
-                    except:
-                        pass
-                    return t_ai1
                 ff = self._get_ffmpeg_exe()
                 if ff:
                     ext = 'mp3' if format == 'mpeg' else format
@@ -419,6 +439,7 @@ class AudioProcessor:
                                 os.remove(out2)
                         except:
                             pass
+                # Fallback IA (bytes)
                 if format in ('ogg', 'oga', 'opus'):
                     mime = 'audio/ogg'
                 elif format in ('mp3', 'mpeg'):
@@ -429,6 +450,9 @@ class AudioProcessor:
                     mime = 'audio/aac'
                 else:
                     mime = 'audio/mpeg'
+                t_ai1 = self.transcribe_audio_bytes(audio_bytes, mime)
+                if t_ai1:
+                    return t_ai1
                 return None
             return None
         except Exception:
