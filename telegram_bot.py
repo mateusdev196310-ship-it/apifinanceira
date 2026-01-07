@@ -517,14 +517,28 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
         campo = "categorias_entrada" if str(tipo).strip().lower() in ("entrada", "1", "receita") else "categorias_saida"
         agg = {}
         try:
-            for mdoc in root.collection("meses").stream():
-                mo = mdoc.to_dict() or {}
-                for k, v in dict(mo.get(campo, {}) or {}).items():
+            hoje = _now_sp()
+            dt_ini = hoje - timedelta(days=60)
+            cur = dt_ini
+            while cur <= hoje:
+                dkey = cur.strftime("%Y-%m-%d")
+                try:
+                    dd = root.collection("dias").document(dkey).get().to_dict() or {}
+                except:
+                    dd = {}
+                for k, v in dict(dd.get(campo, {}) or {}).items():
                     agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+                cur = cur + timedelta(days=1)
         except:
-            mm = root.collection("meses").document(_month_key_sp()).get().to_dict() or {}
-            for k, v in dict(mm.get(campo, {}) or {}).items():
-                agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+            try:
+                for mdoc in root.collection("meses").stream():
+                    mo = mdoc.to_dict() or {}
+                    for k, v in dict(mo.get(campo, {}) or {}).items():
+                        agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
+            except:
+                mm = root.collection("meses").document(_month_key_sp()).get().to_dict() or {}
+                for k, v in dict(mm.get(campo, {}) or {}).items():
+                    agg[k] = float(agg.get(k, 0.0) or 0.0) + float(v or 0.0)
         items = sorted(((k, float(v or 0)) for k, v in agg.items()), key=lambda x: (-x[1], x[0]))
         lst = [k for k, _ in items if k not in ("duvida", "outros")]
         return lst[:limit]
