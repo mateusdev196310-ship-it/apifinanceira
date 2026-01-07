@@ -31,6 +31,7 @@ def _cache_set_api(key, data, ttl=12):
 
 from app.config import API_HOST, API_PORT
 import re as _re
+import unicodedata as _ud
 
 SOURCE_STATS = {
     "local-regra": 0,
@@ -72,6 +73,88 @@ def _month_key_sp():
         return _now_sp().strftime("%Y-%m")
     except:
         return datetime.now().strftime("%Y-%m")
+def _canon_category(cat):
+    k = str(cat or 'outros').strip().lower()
+    try:
+        k = ''.join(c for c in _ud.normalize('NFKD', k) if not _ud.combining(c))
+    except:
+        pass
+    k = _re.sub(r'[^a-z0-9]+', ' ', k).strip()
+    if k in {
+        'alimentacao','transporte','moradia','saude','lazer','vestuario','servicos','salario','vendas','outros','duvida'
+    }:
+        return k
+    return k or 'outros'
+def _normalize_catmap(d):
+    out = {}
+    for k, v in dict(d or {}).items():
+        kk = _canon_category(k)
+        out[kk] = float(out.get(kk, 0.0) or 0.0) + float(v or 0.0)
+    return out
+def _mm_totais(mm):
+    t = dict(mm.get("totais_mes", {}) or {})
+    if not t:
+        t = {
+            "total_entrada": float(mm.get("total_entrada", 0) or 0),
+            "total_saida": float(mm.get("total_saida", 0) or 0),
+            "total_ajuste": float(mm.get("total_ajuste", 0) or 0),
+            "total_estorno": float(mm.get("total_estorno", 0) or 0),
+            "saldo_mes": float(mm.get("saldo_mes", 0) or 0),
+        }
+    return {
+        "entrada": float(t.get("total_entrada", 0) or 0),
+        "saida": float(t.get("total_saida", 0) or 0),
+        "ajuste": float(t.get("total_ajuste", 0) or 0),
+        "estorno": float(t.get("total_estorno", 0) or 0),
+        "saldo": float(t.get("saldo_mes", 0) or 0),
+    }
+def _mm_categorias(mm):
+    c = dict(mm.get("categorias", {}) or {})
+    if not c:
+        return {
+            "entrada": dict(mm.get("categorias_entrada", {}) or {}),
+            "saida": dict(mm.get("categorias_saida", {}) or {}),
+            "estorno": dict(mm.get("categorias_estorno", {}) or {}),
+            "ajuste": dict(mm.get("categorias_ajuste", {}) or {}),
+        }
+    return {
+        "entrada": dict(c.get("entrada", {}) or {}),
+        "saida": dict(c.get("saida", {}) or {}),
+        "estorno": dict(c.get("estorno", {}) or {}),
+        "ajuste": dict(c.get("ajuste", {}) or {}),
+    }
+def _dd_totais(dd):
+    t = dict(dd.get("totais_dia", {}) or {})
+    if not t:
+        t = {
+            "total_entrada": float(dd.get("total_entrada", 0) or 0),
+            "total_saida": float(dd.get("total_saida", 0) or 0),
+            "total_ajuste": float(dd.get("total_ajuste", 0) or 0),
+            "total_estorno": float(dd.get("total_estorno", 0) or 0),
+            "saldo_dia": float(dd.get("saldo_dia", 0) or 0),
+        }
+    return {
+        "entrada": float(t.get("total_entrada", 0) or 0),
+        "saida": float(t.get("total_saida", 0) or 0),
+        "ajuste": float(t.get("total_ajuste", 0) or 0),
+        "estorno": float(t.get("total_estorno", 0) or 0),
+        "saldo": float(t.get("saldo_dia", 0) or 0),
+    }
+def _dd_categorias(dd):
+    c = dict(dd.get("categorias", {}) or {})
+    if not c:
+        return {
+            "entrada": dict(dd.get("categorias_entrada", {}) or {}),
+            "saida": dict(dd.get("categorias_saida", {}) or {}),
+            "estorno": dict(dd.get("categorias_estorno", {}) or {}),
+            "ajuste": dict(dd.get("categorias_ajuste", {}) or {}),
+        }
+    return {
+        "entrada": dict(c.get("entrada", {}) or {}),
+        "saida": dict(c.get("saida", {}) or {}),
+        "estorno": dict(c.get("estorno", {}) or {}),
+        "ajuste": dict(c.get("ajuste", {}) or {}),
+    }
 
 def _coerce_val(o):
     try:
@@ -737,7 +820,7 @@ def compromissos_mes():
         if not vencidos and not a_vencer:
             try:
                 mm = root.collection('meses').document(mes_atual).get().to_dict() or {}
-                cats = dict(mm.get("categorias_saida", {}) or {})
+                cats = dict((_mm_categorias(mm)).get("saida", {}) or {})
                 known = {"internet","energia","água","agua","aluguel","condomínio","condominio","telefonia","telefone","assinatura","fatura"}
                 for k, v in cats.items():
                     if str(k).strip().lower() in known and float(v or 0) > 0:
@@ -966,18 +1049,23 @@ def ajustes_adicionar():
         batch.set(item_ref, tdoc)
         inc_d = {"quantidade_transacoes": firestore.Increment(1), "quantidade_transacoes_validas": firestore.Increment(1), "atualizado_em": firestore.SERVER_TIMESTAMP}
         inc_m = {"quantidade_transacoes": firestore.Increment(1), "quantidade_transacoes_validas": firestore.Increment(1), "atualizado_em": firestore.SERVER_TIMESTAMP}
-        if alvo == "saldo":
-            inc_d.update({"total_ajuste": firestore.Increment(dv), "saldo_dia": firestore.Increment(dv)})
-            inc_m.update({"total_ajuste": firestore.Increment(dv), "saldo_mes": firestore.Increment(dv)})
-        elif alvo == "entrada":
-            inc_d.update({"total_entrada": firestore.Increment(dv), "saldo_dia": firestore.Increment(dv)})
-            inc_m.update({"total_entrada": firestore.Increment(dv), "saldo_mes": firestore.Increment(dv)})
-        elif alvo == "saida":
-            inc_d.update({"total_saida": firestore.Increment(dv), "saldo_dia": firestore.Increment(-dv)})
-            inc_m.update({"total_saida": firestore.Increment(dv), "saldo_mes": firestore.Increment(-dv)})
-        else:
-            inc_d.update({"total_ajuste": firestore.Increment(dv), "saldo_dia": firestore.Increment(dv)})
-            inc_m.update({"total_ajuste": firestore.Increment(dv), "saldo_mes": firestore.Increment(dv)})
+        inc_d.update({
+            "totais_dia.total_ajuste": firestore.Increment(dv),
+            "totais_por_tipo.ajuste": firestore.Increment(dv),
+            "totais_dia.saldo_dia": firestore.Increment(dv),
+            f"categorias.ajuste.{_canon_category(categoria)}": firestore.Increment(dv),
+        })
+        inc_m.update({
+            "totais_mes.total_ajuste": firestore.Increment(dv),
+            "totais_por_tipo.ajuste": firestore.Increment(dv),
+            "totais_mes.saldo_mes": firestore.Increment(dv),
+            f"categorias.ajuste.{_canon_category(categoria)}": firestore.Increment(dv),
+        })
+        try:
+            ano_d, mes_d, dia_d = dr.split("-")
+            batch.set(dref, {"ano": int(ano_d), "mes": int(mes_d), "dia": int(dia_d), "data": dr}, merge=True)
+        except:
+            batch.set(dref, {"data": dr}, merge=True)
         batch.set(dref, inc_d, merge=True)
         batch.set(mref, inc_m, merge=True)
         batch.commit()
@@ -987,16 +1075,16 @@ def ajustes_adicionar():
             "sucesso": True,
             "ajuste": tdoc,
             "totais_dia": {
-                "despesas": float(ddoc.get("total_saida", 0) or 0),
-                "receitas": float(ddoc.get("total_entrada", 0) or 0),
-                "ajustes": float(ddoc.get("total_ajuste", 0) or 0),
-                "saldo": float(ddoc.get("saldo_dia", 0) or 0),
+                "despesas": float((_dd_totais(ddoc))["saida"]),
+                "receitas": float((_dd_totais(ddoc))["entrada"]),
+                "ajustes": float((_dd_totais(ddoc))["ajuste"]),
+                "saldo": float((_dd_totais(ddoc))["saldo"]),
             },
             "totais_mes": {
-                "despesas": float(mdoc.get("total_saida", 0) or 0),
-                "receitas": float(mdoc.get("total_entrada", 0) or 0),
-                "ajustes": float(mdoc.get("total_ajuste", 0) or 0),
-                "saldo": float(mdoc.get("saldo_mes", 0) or 0),
+                "despesas": float((_mm_totais(mdoc))["saida"]),
+                "receitas": float((_mm_totais(mdoc))["entrada"]),
+                "ajustes": float((_mm_totais(mdoc))["ajuste"]),
+                "saldo": float((_mm_totais(mdoc))["saldo"]),
             }
         })
     except Exception as e:
@@ -1029,18 +1117,18 @@ def ajustes_estornar():
                 if k != "imutavel"
             },
             "totais_dia": {
-                "despesas": float(ddoc.get("total_saida", 0) or 0),
-                "receitas": float(ddoc.get("total_entrada", 0) or 0),
-                "ajustes": float(ddoc.get("total_ajuste", 0) or 0),
-                "estornos": float(ddoc.get("total_estorno", 0) or 0),
-                "saldo": float(ddoc.get("saldo_dia", 0) or 0),
+                "despesas": float((_dd_totais(ddoc))["saida"]),
+                "receitas": float((_dd_totais(ddoc))["entrada"]),
+                "ajustes": float((_dd_totais(ddoc))["ajuste"]),
+                "estornos": float((_dd_totais(ddoc))["estorno"]),
+                "saldo": float((_dd_totais(ddoc))["saldo"]),
             },
             "totais_mes": {
-                "despesas": float(mdoc.get("total_saida", 0) or 0),
-                "receitas": float(mdoc.get("total_entrada", 0) or 0),
-                "ajustes": float(mdoc.get("total_ajuste", 0) or 0),
-                "estornos": float(mdoc.get("total_estorno", 0) or 0),
-                "saldo": float(mdoc.get("saldo_mes", 0) or 0),
+                "despesas": float((_mm_totais(mdoc))["saida"]),
+                "receitas": float((_mm_totais(mdoc))["entrada"]),
+                "ajustes": float((_mm_totais(mdoc))["ajuste"]),
+                "estornos": float((_mm_totais(mdoc))["estorno"]),
+                "saldo": float((_mm_totais(mdoc))["saldo"]),
             }
         })
     except Exception as e:
@@ -1072,18 +1160,18 @@ def transacoes_atualizar_categoria():
             "sucesso": True,
             "atualizacao": res,
             "totais_dia": {
-                "despesas": float(ddoc.get("total_saida", 0) or 0),
-                "receitas": float(ddoc.get("total_entrada", 0) or 0),
-                "ajustes": float(ddoc.get("total_ajuste", 0) or 0),
-                "estornos": float(ddoc.get("total_estorno", 0) or 0),
-                "saldo": float(ddoc.get("saldo_dia", 0) or 0),
+                "despesas": float((_dd_totais(ddoc))["saida"]),
+                "receitas": float((_dd_totais(ddoc))["entrada"]),
+                "ajustes": float((_dd_totais(ddoc))["ajuste"]),
+                "estornos": float((_dd_totais(ddoc))["estorno"]),
+                "saldo": float((_dd_totais(ddoc))["saldo"]),
             },
             "totais_mes": {
-                "despesas": float(mdoc.get("total_saida", 0) or 0),
-                "receitas": float(mdoc.get("total_entrada", 0) or 0),
-                "ajustes": float(mdoc.get("total_ajuste", 0) or 0),
-                "estornos": float(mdoc.get("total_estorno", 0) or 0),
-                "saldo": float(mdoc.get("saldo_mes", 0) or 0),
+                "despesas": float((_mm_totais(mdoc))["saida"]),
+                "receitas": float((_mm_totais(mdoc))["entrada"]),
+                "ajustes": float((_mm_totais(mdoc))["ajuste"]),
+                "estornos": float((_mm_totais(mdoc))["estorno"]),
+                "saldo": float((_mm_totais(mdoc))["saldo"]),
             }
         })
     except Exception as e:
@@ -1244,10 +1332,11 @@ def extrato_hoje():
             transacoes = tl
         dref = root.collection('dias').document(data_atual).get()
         dd = dref.to_dict() or {}
-        despesas = float(dd.get("total_saida", 0) or 0)
-        receitas = float(dd.get("total_entrada", 0) or 0)
-        ajustes = float(dd.get("total_ajuste", 0) or 0)
-        estornos = float(dd.get("total_estorno", 0) or 0)
+        td = _dd_totais(dd)
+        despesas = float(td["saida"])
+        receitas = float(td["entrada"])
+        ajustes = float(td["ajuste"])
+        estornos = float(td["estorno"])
         try:
             saldo = float(dd.get("saldo_dia")) if dd.get("saldo_dia") is not None else (receitas - despesas + ajustes)
         except:
@@ -1283,11 +1372,13 @@ def extrato_hoje():
             saldo = receitas - despesas + ajustes
             try:
                 root.collection('dias').document(data_atual).set({
-                    "total_entrada": receitas,
-                    "total_saida": despesas,
-                    "total_ajuste": ajustes,
-                    "total_estorno": estornos,
-                    "saldo_dia": saldo,
+                    "totais_dia": {
+                        "total_entrada": receitas,
+                        "total_saida": despesas,
+                        "total_ajuste": ajustes,
+                        "total_estorno": estornos,
+                        "saldo_dia": saldo,
+                    },
                     "quantidade_transacoes_validas": int(cnt_tmp),
                     "atualizado_em": firestore.SERVER_TIMESTAMP,
                 }, merge=True)
@@ -1418,8 +1509,9 @@ def extrato_mes():
                 need = True
                 if categoria_qs:
                     try:
-                        v1 = float((dd.get("categorias_saida", {}) or {}).get(str(categoria_qs).strip().lower(), 0) or 0)
-                        v2 = float((dd.get("categorias_entrada", {}) or {}).get(str(categoria_qs).strip().lower(), 0) or 0)
+                        dc = _dd_categorias(dd)
+                        v1 = float((dc.get("saida", {}) or {}).get(str(categoria_qs).strip().lower(), 0) or 0)
+                        v2 = float((dc.get("entrada", {}) or {}).get(str(categoria_qs).strip().lower(), 0) or 0)
                         need = (v1 > 0 or v2 > 0)
                     except:
                         need = True
@@ -1526,11 +1618,12 @@ def total_mes():
             return jsonify(c)
         mref = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual).get()
         mm = mref.to_dict() or {}
-        total_despesas = float(mm.get("total_saida", 0) or 0)
-        total_receitas = float(mm.get("total_entrada", 0) or 0)
-        total_ajustes = float(mm.get("total_ajuste", 0) or 0)
-        total_estornos = float(mm.get("total_estorno", 0) or 0)
-        saldo = total_receitas - total_despesas + total_ajustes
+        mt = _mm_totais(mm)
+        total_despesas = float(mt["saida"])
+        total_receitas = float(mt["entrada"])
+        total_ajustes = float(mt["ajuste"])
+        total_estornos = float(mt["estorno"])
+        saldo = float(mt["saldo"])
         quantidade_transacoes_validas = int(mm.get("quantidade_transacoes_validas", mm.get("quantidade_transacoes", 0)) or 0)
         if (total_despesas == 0 and total_receitas == 0 and total_ajustes == 0 and total_estornos == 0):
             try:
@@ -1548,10 +1641,11 @@ def total_mes():
                     dkey = cur.strftime("%Y-%m-%d")
                     try:
                         dd = root.collection('dias').document(dkey).get().to_dict() or {}
-                        td += float(dd.get("total_saida", 0) or 0)
-                        tr += float(dd.get("total_entrada", 0) or 0)
-                        taj += float(dd.get("total_ajuste", 0) or 0)
-                        tes += float(dd.get("total_estorno", 0) or 0)
+                        _t = _dd_totais(dd)
+                        td += float(_t["saida"])
+                        tr += float(_t["entrada"])
+                        taj += float(_t["ajuste"])
+                        tes += float(_t["estorno"])
                     except:
                         pass
                     cur = cur + timedelta(days=1)
@@ -1559,7 +1653,7 @@ def total_mes():
                 total_receitas = tr
                 total_ajustes = taj
                 total_estornos = tes
-                saldo = total_receitas - total_despesas + total_ajustes
+                saldo = total_receitas - total_despesas + total_estornos + total_ajustes
             except:
                 pass
         try:
@@ -1591,7 +1685,7 @@ def total_mes():
                 total_receitas = float(tr or 0)
                 total_ajustes = float(taj or 0)
                 total_estornos = float(tes or 0)
-                saldo = total_receitas - total_despesas + total_ajustes
+                saldo = total_receitas - total_despesas + total_estornos + total_ajustes
         except:
             pass
         try:
@@ -1650,15 +1744,17 @@ def total_mes():
             pass
         try:
             mdoc = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual)
-            mm2 = {
-                "total_entrada": float(total_receitas or 0),
-                "total_saida": float(total_despesas or 0),
-                "total_ajuste": float(total_ajustes or 0),
-                "total_estorno": float(total_estornos or 0),
-                "saldo_mes": float((total_receitas - total_despesas + total_ajustes) or 0),
+            mdoc.set({
+                "totais_mes": {
+                    "total_entrada": float(total_receitas or 0),
+                    "total_saida": float(total_despesas or 0),
+                    "total_ajuste": float(total_ajustes or 0),
+                    "total_estorno": float(total_estornos or 0),
+                    "saldo_mes": float((total_receitas - total_despesas + total_estornos + total_ajustes) or 0),
+                },
                 "quantidade_transacoes_validas": int(quantidade_transacoes_validas or 0),
-            }
-            mdoc.set(mm2, merge=True)
+                "atualizado_em": firestore.SERVER_TIMESTAMP,
+            }, merge=True)
         except:
             pass
         resp = {
@@ -1704,10 +1800,11 @@ def total_semana():
             dkey = dt_cur.strftime("%Y-%m-%d")
             ddoc = db.collection('clientes').document(cliente_id).collection('dias').document(dkey).get()
             o = ddoc.to_dict() or {}
-            total_despesas += float(o.get("total_saida", 0) or 0)
-            total_receitas += float(o.get("total_entrada", 0) or 0)
-            total_estornos += float(o.get("total_estorno", 0) or 0)
-            total_ajustes += float(o.get("total_ajuste", 0) or 0)
+            td = _dd_totais(o)
+            total_despesas += float(td["saida"])
+            total_receitas += float(td["entrada"])
+            total_estornos += float(td["estorno"])
+            total_ajustes += float(td["ajuste"])
             dt_cur += timedelta(days=1)
         saldo = total_receitas - total_despesas + total_ajustes
         return jsonify({
@@ -1726,10 +1823,10 @@ def total_semana():
         return jsonify({"sucesso": False, "erro": str(e)}), 500
 @app.route('/total/geral', methods=['GET'])
 def total_geral():
-    total_despesas = 0
-    total_receitas = 0
-    total_estornos = 0
-    total_ajustes = 0
+    total_despesas = 0.0
+    total_receitas = 0.0
+    total_estornos = 0.0
+    total_ajustes = 0.0
     try:
         db = get_db()
         cliente_id = str(request.args.get("cliente_id") or "default")
@@ -1741,17 +1838,18 @@ def total_geral():
             pass
         for m in db.collection('clientes').document(cliente_id).collection('meses').stream():
             o = m.to_dict() or {}
-            total_despesas += float(o.get("total_saida", 0) or 0)
-            total_receitas += float(o.get("total_entrada", 0) or 0)
-            total_estornos += float(o.get("total_estorno", 0) or 0)
-            total_ajustes += float(o.get("total_ajuste", 0) or 0)
-        saldo = total_receitas - total_despesas + total_ajustes
+            mt = _mm_totais(o)
+            total_despesas += float(mt["saida"])
+            total_receitas += float(mt["entrada"])
+            total_estornos += float(mt["estorno"])
+            total_ajustes += float(mt["ajuste"])
+        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
         return jsonify({
             "sucesso": True,
             "total": {
                 "despesas": total_despesas,
                 "receitas": total_receitas,
-                "saldo": saldo,
+                "saldo": float(saldo or 0.0),
                 "estornos": total_estornos,
                 "ajustes": total_ajustes
             }
@@ -1818,13 +1916,14 @@ def recompute_cliente():
         root = db.collection('clientes').document(cliente_id)
         mes_atual = _month_key_sp()
         mm = root.collection('meses').document(mes_atual).get().to_dict() or {}
+        mt = _mm_totais(mm)
         total = {
-            "despesas": float(mm.get("total_saida", 0) or 0),
-            "receitas": float(mm.get("total_entrada", 0) or 0),
-            "ajustes": float(mm.get("total_ajuste", 0) or 0),
-            "estornos": float(mm.get("total_estorno", 0) or 0),
+            "despesas": float(mt["saida"]),
+            "receitas": float(mt["entrada"]),
+            "ajustes": float(mt["ajuste"]),
+            "estornos": float(mt["estorno"]),
+            "saldo": float(mt["saldo"]),
         }
-        total["saldo"] = total["receitas"] - total["despesas"] + total["ajustes"]
         qtd_validas = int(mm.get("quantidade_transacoes_validas", mm.get("quantidade_transacoes", 0)) or 0)
         return jsonify({"sucesso": True, "resultado": res, "mes_atual": mes_atual, "total": total, "quantidade_transacoes_validas": qtd_validas})
     except Exception as e:
@@ -1875,14 +1974,12 @@ def saldo_atual():
             if mes:
                 mdoc = root.collection('meses').document(mes).get()
                 mm = mdoc.to_dict() or {}
-                total_despesas = float(mm.get("total_saida", 0) or 0)
-                total_receitas = float(mm.get("total_entrada", 0) or 0)
-                total_ajustes = float(mm.get("total_ajuste", 0) or 0)
-                total_estornos = float(mm.get("total_estorno", 0) or 0)
-                try:
-                    saldo = float(mm.get("saldo_mes")) if mm.get("saldo_mes") is not None else (total_receitas - total_despesas + total_ajustes)
-                except:
-                    saldo = total_receitas - total_despesas + total_ajustes
+                mt = _mm_totais(mm)
+                total_despesas = float(mt["saida"])
+                total_receitas = float(mt["entrada"])
+                total_ajustes = float(mt["ajuste"])
+                total_estornos = float(mt["estorno"])
+                saldo = float(mt["saldo"])
                 saldo_real = saldo
                 try:
                     sr = 0.0
@@ -1891,11 +1988,19 @@ def saldo_atual():
                         if mid and mid <= mes:
                             mo = mdoc2.to_dict() or {}
                             try:
-                                v = float(mo.get("saldo_mes")) if mo.get("saldo_mes") is not None else (
-                                    float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0)
+                                v = float((mo.get("totais_mes", {}) or {}).get("saldo_mes")) if (mo.get("totais_mes") and (mo.get("totais_mes", {}) or {}).get("saldo_mes") is not None) else (
+                                    float((mo.get("totais_mes", {}) or {}).get("total_entrada", mo.get("total_entrada", 0)) or 0)
+                                    - float((mo.get("totais_mes", {}) or {}).get("total_saida", mo.get("total_saida", 0)) or 0)
+                                    + float((mo.get("totais_mes", {}) or {}).get("total_estorno", mo.get("total_estorno", 0)) or 0)
+                                    + float((mo.get("totais_mes", {}) or {}).get("total_ajuste", mo.get("total_ajuste", 0)) or 0)
                                 )
                             except:
-                                v = (float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0))
+                                v = (
+                                    float((mo.get("totais_mes", {}) or {}).get("total_entrada", mo.get("total_entrada", 0)) or 0)
+                                    - float((mo.get("totais_mes", {}) or {}).get("total_saida", mo.get("total_saida", 0)) or 0)
+                                    + float((mo.get("totais_mes", {}) or {}).get("total_estorno", mo.get("total_estorno", 0)) or 0)
+                                    + float((mo.get("totais_mes", {}) or {}).get("total_ajuste", mo.get("total_ajuste", 0)) or 0)
+                                )
                             sr += float(v or 0)
                     saldo_real = float(sr or saldo)
                 except:
@@ -1920,10 +2025,11 @@ def saldo_atual():
                             dkey = dt_cur.strftime("%Y-%m-%d")
                             try:
                                 dd = root.collection('dias').document(dkey).get().to_dict() or {}
-                                td += float(dd.get("total_saida", 0) or 0)
-                                tr += float(dd.get("total_entrada", 0) or 0)
-                                taj += float(dd.get("total_ajuste", 0) or 0)
-                                tes += float(dd.get("total_estorno", 0) or 0)
+                                _t = _dd_totais(dd)
+                                td += float(_t["saida"])
+                                tr += float(_t["entrada"])
+                                taj += float(_t["ajuste"])
+                                tes += float(_t["estorno"])
                             except:
                                 pass
                             dt_cur = dt_cur + timedelta(days=1)
@@ -1931,14 +2037,16 @@ def saldo_atual():
                         total_receitas = float(tr or 0)
                         total_ajustes = float(taj or 0)
                         total_estornos = float(tes or 0)
-                        saldo = total_receitas - total_despesas + total_ajustes
+                        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
                         try:
                             root.collection('meses').document(mes).set({
-                                "total_entrada": total_receitas,
-                                "total_saida": total_despesas,
-                                "total_ajuste": total_ajustes,
-                                "total_estorno": total_estornos,
-                                "saldo_mes": saldo,
+                                "totais_mes": {
+                                    "total_entrada": total_receitas,
+                                    "total_saida": total_despesas,
+                                    "total_ajuste": total_ajustes,
+                                    "total_estorno": total_estornos,
+                                    "saldo_mes": saldo,
+                                },
                                 "atualizado_em": firestore.SERVER_TIMESTAMP,
                             }, merge=True)
                         except:
@@ -1973,14 +2081,16 @@ def saldo_atual():
                         total_receitas = float(tr or 0)
                         total_ajustes = float(taj or 0)
                         total_estornos = float(tes or 0)
-                        saldo = total_receitas - total_despesas + total_ajustes
+                        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
                         try:
                             root.collection('meses').document(mes).set({
-                                "total_entrada": total_receitas,
-                                "total_saida": total_despesas,
-                                "total_ajuste": total_ajustes,
-                                "total_estorno": total_estornos,
-                                "saldo_mes": saldo,
+                                "totais_mes": {
+                                    "total_entrada": total_receitas,
+                                    "total_saida": total_despesas,
+                                    "total_ajuste": total_ajustes,
+                                    "total_estorno": total_estornos,
+                                    "saldo_mes": saldo,
+                                },
                                 "atualizado_em": firestore.SERVER_TIMESTAMP,
                             }, merge=True)
                         except:
@@ -1996,10 +2106,11 @@ def saldo_atual():
                     dkey = dt_cur.strftime("%Y-%m-%d")
                     ddoc = root.collection('dias').document(dkey).get()
                     dd = ddoc.to_dict() or {}
-                    total_despesas += float(dd.get("total_saida", 0) or 0)
-                    total_receitas += float(dd.get("total_entrada", 0) or 0)
-                    total_ajustes += float(dd.get("total_ajuste", 0) or 0)
-                    total_estornos += float(dd.get("total_estorno", 0) or 0)
+                    td = _dd_totais(dd)
+                    total_despesas += float(td["saida"])
+                    total_receitas += float(td["entrada"])
+                    total_ajustes += float(td["ajuste"])
+                    total_estornos += float(td["estorno"])
                     dt_cur += timedelta(days=1)
                 saldo_real = None
                 try:
@@ -2023,7 +2134,9 @@ def saldo_atual():
                         k = cur2.strftime("%Y-%m-%d")
                         try:
                             dd2 = root.collection('dias').document(k).get().to_dict() or {}
-                            sr += float(dd2.get("total_entrada", 0) or 0) - float(dd2.get("total_saida", 0) or 0) + float(dd2.get("total_ajuste", 0) or 0)
+                            td2 = _dd_totais(dd2)
+                            sr += float(td2["entrada"]) - float(td2["saida"]) + float(td2["ajuste"])
+                            sr += float(td2["entrada"]) - float(td2["saida"]) + float(td2["ajuste"])
                         except:
                             pass
                         cur2 = cur2 + timedelta(days=1)
@@ -2036,16 +2149,17 @@ def saldo_atual():
                 sr_count = 0
                 for m in root.collection('meses').stream():
                     mm = m.to_dict() or {}
-                    total_despesas += float(mm.get("total_saida", 0) or 0)
-                    total_receitas += float(mm.get("total_entrada", 0) or 0)
-                    total_ajustes += float(mm.get("total_ajuste", 0) or 0)
-                    total_estornos += float(mm.get("total_estorno", 0) or 0)
+                    mt2 = _mm_totais(mm)
+                    total_despesas += float(mt2["saida"])
+                    total_receitas += float(mt2["entrada"])
+                    total_ajustes += float(mt2["ajuste"])
+                    total_estornos += float(mt2["estorno"])
                     try:
-                        v = float(mm.get("saldo_mes")) if mm.get("saldo_mes") is not None else (
-                            float(mm.get("total_entrada", 0) or 0) - float(mm.get("total_saida", 0) or 0) + float(mm.get("total_ajuste", 0) or 0)
+                        v = float((mm.get("totais_mes", {}) or {}).get("saldo_mes")) if (mm.get("totais_mes") and (mm.get("totais_mes", {}) or {}).get("saldo_mes") is not None) else (
+                            float(mt2["entrada"]) - float(mt2["saida"]) + float(mt2["estorno"]) + float(mt2["ajuste"])
                         )
                     except:
-                        v = (float(mm.get("total_entrada", 0) or 0) - float(mm.get("total_saida", 0) or 0) + float(mm.get("total_ajuste", 0) or 0))
+                        v = (float(mt2["entrada"]) - float(mt2["saida"]) + float(mt2["estorno"]) + float(mt2["ajuste"]))
                     sr += float(v or 0)
                     sr_count += 1
                 try:
@@ -2057,7 +2171,7 @@ def saldo_atual():
                     saldo_real = float(sr) if sr_count > 0 else (saldo_real_root if saldo_real_root is not None else None)
                 except:
                     saldo_real = saldo_real_root
-            saldo = total_receitas - total_despesas + total_ajustes
+            saldo = total_receitas - total_despesas + total_estornos + total_ajustes
             if mes:
                 try:
                     pass
@@ -2090,13 +2204,15 @@ def saldo_atual():
         if group_by == 'categoria' and mes:
             mdoc = root.collection('meses').document(mes).get()
             mm = mdoc.to_dict() or {}
-            cat_exp = dict(mm.get("categorias_saida", {}) or {})
-            cat_inc = dict(mm.get("categorias_entrada", {}) or {})
-            cat_est = dict(mm.get("categorias_estorno", {}) or {})
+            cats_mm = _mm_categorias(mm)
+            cat_exp = _normalize_catmap(cats_mm.get("saida", {}) or {})
+            cat_inc = _normalize_catmap(cats_mm.get("entrada", {}) or {})
+            cat_est = _normalize_catmap(cats_mm.get("estorno", {}) or {})
             recalc = False
             try:
-                mm_total_saida = float(mm.get("total_saida", 0) or 0)
-                mm_total_entrada = float(mm.get("total_entrada", 0) or 0)
+                mt = _mm_totais(mm)
+                mm_total_saida = float(mt["saida"])
+                mm_total_entrada = float(mt["entrada"])
                 sum_cat_exp = sum(float(v or 0) for v in dict(cat_exp or {}).values())
                 sum_cat_inc = sum(float(v or 0) for v in dict(cat_inc or {}).values())
                 if abs(sum_cat_exp - mm_total_saida) > 1e-6 or abs(sum_cat_inc - mm_total_entrada) > 1e-6:
@@ -2121,11 +2237,12 @@ def saldo_atual():
                         except:
                             dd = {}
                         try:
-                            for k, v in dict(dd.get("categorias_saida", {}) or {}).items():
+                            dc = _dd_categorias(dd)
+                            for k, v in dict(dc.get("saida", {}) or {}).items():
                                 cat_exp[k] = float(cat_exp.get(k, 0) or 0) + float(v or 0)
-                            for k, v in dict(dd.get("categorias_entrada", {}) or {}).items():
+                            for k, v in dict(dc.get("entrada", {}) or {}).items():
                                 cat_inc[k] = float(cat_inc.get(k, 0) or 0) + float(v or 0)
-                            for k, v in dict(dd.get("categorias_estorno", {}) or {}).items():
+                            for k, v in dict(dc.get("estorno", {}) or {}).items():
                                 cat_est[k] = float(cat_est.get(k, 0) or 0) + float(v or 0)
                         except:
                             pass
@@ -2133,9 +2250,25 @@ def saldo_atual():
                     try:
                         mdoc_set = root.collection('meses').document(mes)
                         mdoc_set.set({
-                            "categorias_saida": {k: float(v or 0) for k, v in cat_exp.items()},
-                            "categorias_entrada": {k: float(v or 0) for k, v in cat_inc.items()},
-                            "categorias_estorno": {k: float(v or 0) for k, v in cat_est.items()},
+                            "categorias": {
+                                "saida": {k: float(v or 0) for k, v in _normalize_catmap(cat_exp).items()},
+                                "entrada": {k: float(v or 0) for k, v in _normalize_catmap(cat_inc).items()},
+                                "estorno": {k: float(v or 0) for k, v in _normalize_catmap(cat_est).items()},
+                                "ajuste": dict((mm.get("categorias", {}) or {}).get("ajuste", {}) or {}),
+                            },
+                            "totais_por_tipo": {
+                                "saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
+                                "entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
+                                "estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
+                                "ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_por_tipo", {}) or {}).get("ajuste", 0.0))),
+                            },
+                            "totais_mes": {
+                                "total_saida": float(sum(_normalize_catmap(cat_exp).values()) or mm_total_saida),
+                                "total_entrada": float(sum(_normalize_catmap(cat_inc).values()) or mm_total_entrada),
+                                "total_estorno": float(sum(_normalize_catmap(cat_est).values()) or float((mm.get("totais_mes", {}) or {}).get("total_estorno", 0.0))),
+                                "total_ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_mes", {}) or {}).get("total_ajuste", 0.0))),
+                                "saldo_mes": float((float(sum(_normalize_catmap(cat_inc).values()) or mm_total_entrada) - float(sum(_normalize_catmap(cat_exp).values()) or mm_total_saida) + float(sum(_normalize_catmap(cat_est).values()) or 0.0) + float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or 0.0))),
+                            },
                             "atualizado_em": firestore.SERVER_TIMESTAMP,
                         }, merge=True)
                     except:
@@ -2156,7 +2289,7 @@ def saldo_atual():
                         if t.get('estornado'):
                             continue
                         tp_raw = str(t.get('tipo', '')).strip().lower()
-                        cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+                        cat = _canon_category(t.get('categoria', 'outros'))
                         val = float(t.get('valor', 0) or 0)
                         if tp_raw in ('entrada', '1', 'receita'):
                             cat_inc[cat] = float(cat_inc.get(cat, 0) or 0) + val
@@ -2167,9 +2300,25 @@ def saldo_atual():
                     try:
                         mdoc_set = root.collection('meses').document(mes)
                         mdoc_set.set({
-                            "categorias_saida": {k: float(v or 0) for k, v in cat_exp.items()},
-                            "categorias_entrada": {k: float(v or 0) for k, v in cat_inc.items()},
-                            "categorias_estorno": {k: float(v or 0) for k, v in cat_est.items()},
+                            "categorias": {
+                                "saida": {k: float(v or 0) for k, v in _normalize_catmap(cat_exp).items()},
+                                "entrada": {k: float(v or 0) for k, v in _normalize_catmap(cat_inc).items()},
+                                "estorno": {k: float(v or 0) for k, v in _normalize_catmap(cat_est).items()},
+                                "ajuste": dict((mm.get("categorias", {}) or {}).get("ajuste", {}) or {}),
+                            },
+                            "totais_por_tipo": {
+                                "saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
+                                "entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
+                                "estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
+                                "ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_por_tipo", {}) or {}).get("ajuste", 0.0))),
+                            },
+                            "totais_mes": {
+                                "total_saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
+                                "total_entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
+                                "total_estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
+                                "total_ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_mes", {}) or {}).get("total_ajuste", 0.0))),
+                                "saldo_mes": float((float(sum(_normalize_catmap(cat_inc).values()) or 0.0) - float(sum(_normalize_catmap(cat_exp).values()) or 0.0) + float(sum(_normalize_catmap(cat_est).values()) or 0.0) + float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or 0.0))),
+                            },
                             "atualizado_em": firestore.SERVER_TIMESTAMP,
                         }, merge=True)
                     except:
@@ -2178,8 +2327,9 @@ def saldo_atual():
                     pass
             need_stream = False
             try:
-                mm_total_saida = float(mm.get("total_saida", 0) or 0)
-                mm_total_entrada = float(mm.get("total_entrada", 0) or 0)
+                mt3 = _mm_totais(mm)
+                mm_total_saida = float(mt3["saida"])
+                mm_total_entrada = float(mt3["entrada"])
                 sum_cat_exp = sum(float(v or 0) for v in dict(cat_exp or {}).values())
                 sum_cat_inc = sum(float(v or 0) for v in dict(cat_inc or {}).values())
                 if abs(sum_cat_exp - mm_total_saida) > 1e-6 or abs(sum_cat_inc - mm_total_entrada) > 1e-6:
@@ -2206,11 +2356,12 @@ def saldo_atual():
                         except:
                             dd = {}
                         try:
-                            for k, v in dict(dd.get("categorias_saida", {}) or {}).items():
+                            _c = _dd_categorias(dd)
+                            for k, v in dict(_c.get("saida", {}) or {}).items():
                                 cat_exp[k] = float(cat_exp.get(k, 0) or 0) + float(v or 0)
-                            for k, v in dict(dd.get("categorias_entrada", {}) or {}).items():
+                            for k, v in dict(_c.get("entrada", {}) or {}).items():
                                 cat_inc[k] = float(cat_inc.get(k, 0) or 0) + float(v or 0)
-                            for k, v in dict(dd.get("categorias_estorno", {}) or {}).items():
+                            for k, v in dict(_c.get("estorno", {}) or {}).items():
                                 cat_est[k] = float(cat_est.get(k, 0) or 0) + float(v or 0)
                         except:
                             pass
@@ -2218,9 +2369,25 @@ def saldo_atual():
                     try:
                         mdoc_set2 = root.collection('meses').document(mes)
                         mdoc_set2.set({
-                            "categorias_saida": {k: float(v or 0) for k, v in cat_exp.items()},
-                            "categorias_entrada": {k: float(v or 0) for k, v in cat_inc.items()},
-                            "categorias_estorno": {k: float(v or 0) for k, v in cat_est.items()},
+                            "categorias": {
+                                "saida": {k: float(v or 0) for k, v in _normalize_catmap(cat_exp).items()},
+                                "entrada": {k: float(v or 0) for k, v in _normalize_catmap(cat_inc).items()},
+                                "estorno": {k: float(v or 0) for k, v in _normalize_catmap(cat_est).items()},
+                                "ajuste": dict((mm.get("categorias", {}) or {}).get("ajuste", {}) or {}),
+                            },
+                            "totais_por_tipo": {
+                                "saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
+                                "entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
+                                "estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
+                                "ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_por_tipo", {}) or {}).get("ajuste", 0.0))),
+                            },
+                            "totais_mes": {
+                                "total_saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
+                                "total_entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
+                                "total_estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
+                                "total_ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_mes", {}) or {}).get("total_ajuste", 0.0))),
+                                "saldo_mes": float((float(sum(_normalize_catmap(cat_inc).values()) or 0.0) - float(sum(_normalize_catmap(cat_exp).values()) or 0.0) + float(sum(_normalize_catmap(cat_est).values()) or 0.0) + float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or 0.0))),
+                            },
                             "atualizado_em": firestore.SERVER_TIMESTAMP,
                         }, merge=True)
                     except:
@@ -2242,9 +2409,9 @@ def saldo_atual():
                 total_despesas = sum(float(v or 0) for v in cat_exp.values())
             if not tipo_filter or tipo_filter == 'entrada':
                 total_receitas = sum(float(v or 0) for v in cat_inc.values())
-            total_ajustes = 0.0 if (cats or tipo_filter) else float(mm.get("total_ajuste", 0) or 0)
-            total_estornos = sum(float(v or 0) for v in cat_est.values()) if (cats or tipo_filter) else float(mm.get("total_estorno", 0) or 0)
-            saldo = total_receitas - total_despesas + total_ajustes
+            total_ajustes = 0.0 if (cats or tipo_filter) else float((_mm_totais(mm))["ajuste"])
+            total_estornos = sum(float(v or 0) for v in cat_est.values()) if (cats or tipo_filter) else float((_mm_totais(mm))["estorno"])
+            saldo = total_receitas - total_despesas + total_estornos + total_ajustes
             resp = {
                 "sucesso": True,
                 "filtros": {
@@ -2264,7 +2431,8 @@ def saldo_atual():
                 "categorias": {
                     "despesas": cat_exp,
                     "receitas": cat_inc,
-                    "estornos": cat_est
+                    "estornos": cat_est,
+                    "ajustes": dict((_mm_categorias(mm)).get("ajuste", {}) or {}),
                 }
             }
             return jsonify(resp)
@@ -2367,13 +2535,14 @@ def health_consistency():
         root = db.collection('clientes').document(cliente_id)
         ddoc = root.collection('dias').document(hoje).get()
         dd = ddoc.to_dict() or {}
+        td_d = _dd_totais(dd)
         dia_ag = {
-            "despesas": float(dd.get("total_saida", 0) or 0),
-            "receitas": float(dd.get("total_entrada", 0) or 0),
-            "ajustes": float(dd.get("total_ajuste", 0) or 0),
-            "estornos": float(dd.get("total_estorno", 0) or 0),
+            "despesas": float(td_d["saida"]),
+            "receitas": float(td_d["entrada"]),
+            "ajustes": float(td_d["ajuste"]),
+            "estornos": float(td_d["estorno"]),
         }
-        dia_ag["saldo"] = dia_ag["receitas"] - dia_ag["despesas"] + dia_ag["ajustes"]
+        dia_ag["saldo"] = float(td_d["saldo"])
         qtd_validas_ag = int(dd.get("quantidade_transacoes_validas", dd.get("quantidade_transacoes", 0)) or 0)
         cnt_stream = 0
         try:
@@ -2414,13 +2583,14 @@ def health_consistency():
             cnt_stream = 0
         mdoc = root.collection('meses').document(mes_atual).get()
         mm = mdoc.to_dict() or {}
+        mt_mm = _mm_totais(mm)
         mes_ag = {
-            "despesas": float(mm.get("total_saida", 0) or 0),
-            "receitas": float(mm.get("total_entrada", 0) or 0),
-            "ajustes": float(mm.get("total_ajuste", 0) or 0),
-            "estornos": float(mm.get("total_estorno", 0) or 0),
+            "despesas": float(mt_mm["saida"]),
+            "receitas": float(mt_mm["entrada"]),
+            "ajustes": float(mt_mm["ajuste"]),
+            "estornos": float(mt_mm["estorno"]),
         }
-        mes_ag["saldo"] = mes_ag["receitas"] - mes_ag["despesas"] + mes_ag["ajustes"]
+        mes_ag["saldo"] = float(mt_mm["saldo"])
         qtd_validas_mesdoc = int(mm.get("quantidade_transacoes_validas", mm.get("quantidade_transacoes", 0)) or 0)
         td = tr = taj = tes = 0.0
         qtd_validas_dias = 0
@@ -2437,10 +2607,11 @@ def health_consistency():
                 dkey = cur.strftime("%Y-%m-%d")
                 try:
                     dd2 = root.collection('dias').document(dkey).get().to_dict() or {}
-                    td += float(dd2.get("total_saida", 0) or 0)
-                    tr += float(dd2.get("total_entrada", 0) or 0)
-                    taj += float(dd2.get("total_ajuste", 0) or 0)
-                    tes += float(dd2.get("total_estorno", 0) or 0)
+                    _t2 = _dd_totais(dd2)
+                    td += float(_t2["saida"])
+                    tr += float(_t2["entrada"])
+                    taj += float(_t2["ajuste"])
+                    tes += float(_t2["estorno"])
                     if "quantidade_transacoes_validas" in dd2:
                         qtd_validas_dias += int(dd2.get("quantidade_transacoes_validas", 0) or 0)
                     else:

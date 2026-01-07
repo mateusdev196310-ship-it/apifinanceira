@@ -58,10 +58,11 @@ def _ensure_month_consistency(cliente_id: str, mes_atual: str):
         mm_doc = root.collection("meses").document(mes_atual).get().to_dict() or {}
     except Exception:
         mm_doc = {}
-    td = float(mm_doc.get("total_saida", 0) or 0)
-    tr = float(mm_doc.get("total_entrada", 0) or 0)
-    taj = float(mm_doc.get("total_ajuste", 0) or 0)
-    tes = float(mm_doc.get("total_estorno", 0) or 0)
+    tmm = dict(mm_doc.get("totais_mes", {}) or {})
+    td = float(tmm.get("total_saida", mm_doc.get("total_saida", 0)) or 0)
+    tr = float(tmm.get("total_entrada", mm_doc.get("total_entrada", 0)) or 0)
+    taj = float(tmm.get("total_ajuste", mm_doc.get("total_ajuste", 0)) or 0)
+    tes = float(tmm.get("total_estorno", mm_doc.get("total_estorno", 0)) or 0)
     saldo = float(mm_doc.get("saldo_mes", (tr - td + taj)) or (tr - td + taj))
     try:
         if (td + tr + taj + tes) > 0 and mm_doc.get("saldo_mes") is not None:
@@ -82,10 +83,11 @@ def _ensure_month_consistency(cliente_id: str, mes_atual: str):
         dkey = cur.strftime("%Y-%m-%d")
         try:
             dd = root.collection("dias").document(dkey).get().to_dict() or {}
-            s_td += float(dd.get("total_saida", 0) or 0)
-            s_tr += float(dd.get("total_entrada", 0) or 0)
-            s_taj += float(dd.get("total_ajuste", 0) or 0)
-            s_tes += float(dd.get("total_estorno", 0) or 0)
+            tdd = dict(dd.get("totais_dia", {}) or {})
+            s_td += float(tdd.get("total_saida", dd.get("total_saida", 0)) or 0)
+            s_tr += float(tdd.get("total_entrada", dd.get("total_entrada", 0)) or 0)
+            s_taj += float(tdd.get("total_ajuste", dd.get("total_ajuste", 0)) or 0)
+            s_tes += float(tdd.get("total_estorno", dd.get("total_estorno", 0)) or 0)
             qv_sum += int(dd.get("quantidade_transacoes_validas", 0) or 0)
         except Exception:
             pass

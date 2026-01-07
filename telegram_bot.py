@@ -181,6 +181,16 @@ def _month_key_sp():
         return _now_sp().strftime("%Y-%m")
     except:
         return datetime.now().strftime("%Y-%m")
+def _canon_category(cat):
+    s = str(cat or 'outros').strip().lower()
+    try:
+        s = ''.join(c for c in unicodedata.normalize('NFKD', s) if not unicodedata.combining(c))
+    except:
+        pass
+    s = re.sub(r'[^a-z0-9]+', ' ', s).strip()
+    if s in {'alimentacao','transporte','moradia','saude','lazer','vestuario','servicos','salario','vendas','outros','duvida'}:
+        return s
+    return s or 'outros'
 
 _BG_LIMIT = int(os.getenv("BOT_MAX_CONCURRENCY", "2") or "2")
 _bg_semaphore = asyncio.Semaphore(_BG_LIMIT if _BG_LIMIT > 0 else 1)
@@ -2179,12 +2189,36 @@ async def categorias_mes(query, context):
                     tp_raw = str(t.get('tipo', '')).strip().lower()
                     if tp_raw not in ('saida','entrada'):
                         continue
-                    cat = str(t.get('categoria', 'outros') or 'outros').strip().lower()
+                    cat = _canon_category(t.get('categoria', 'outros'))
                     v = float(t.get('valor', 0) or 0)
                     if tp_raw == 'saida':
                         despesas[cat] = float(despesas.get(cat, 0) or 0) + v
                     else:
                         receitas[cat] = float(receitas.get(cat, 0) or 0) + v
+            except:
+                pass
+        try:
+            tot_geral = geral_api.get("total", {}) if geral_api.get("sucesso") else {}
+            saldo_geral_real = float(tot_geral.get("saldo_real", tot_geral.get("saldo", 0)) or 0)
+        except:
+            saldo_geral_real = 0.0
+        try:
+            tm_tot = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
+            tm_has_vals = bool(float(tm_tot.get("receitas", 0) or 0) or float(tm_tot.get("despesas", 0) or 0) or float(tm_tot.get("ajustes", 0) or 0))
+        except:
+            tm_has_vals = False
+        if (not despesas and not receitas) and (saldo_geral_real != 0.0 or tm_has_vals):
+            try:
+                recompute_url = f"{API_URL}/recompute/cliente"
+                await _post_json_async(recompute_url, {"cliente_id": str(cid)}, timeout=8)
+                cat_api3 = await _req_json_async(cat_group_url, timeout=6)
+                if cat_api3.get("sucesso"):
+                    categorias3 = (cat_api3.get("categorias", {}) or {})
+                    despesas = dict((categorias3.get("despesas") or {}))
+                    receitas = dict((categorias3.get("receitas") or {}))
+                tm_api2 = await _req_json_async(total_mes_url, timeout=6)
+                if tm_api2.get("sucesso"):
+                    tm_api = tm_api2
             except:
                 pass
         despesas = {k: float(v or 0) for k, v in despesas.items() if float(v or 0) > 0}

@@ -1,5 +1,6 @@
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone, timedelta
 try:
     import firebase_admin
@@ -55,6 +56,23 @@ def _month_key_sp():
         return _now_sp().strftime("%Y-%m")
     except:
         return datetime.now().strftime("%Y-%m")
+
+def _canon_category(cat):
+    k = str(cat or 'outros').strip().lower()
+    try:
+        k = ''.join(c for c in unicodedata.normalize('NFKD', k) if not unicodedata.combining(c))
+    except:
+        pass
+    k = re.sub(r'[^a-z0-9]+', ' ', k).strip()
+    if k in {
+        'alimentacao','transporte','moradia','saude','lazer','vestuario','servicos','salario','vendas','outros','duvida'
+    }:
+        return k
+    try:
+        mapped = detect_category(k)
+        return mapped if mapped else (k or 'outros')
+    except:
+        return (k or 'outros')
 
 def _cred_path():
     p1 = os.getenv("FIREBASE_CREDENTIALS")
@@ -258,7 +276,8 @@ def _canon_desc(t, tipo, categoria):
 def normalize_item_for_store(item):
     it = dict(item or {})
     tipo = str(it.get('tipo', '0')).strip()
-    categoria = str(it.get('categoria', 'outros')).strip().lower()
+    categoria_raw = str(it.get('categoria', 'outros')).strip()
+    categoria = _canon_category(categoria_raw)
     desc_raw = str(it.get('descricao', '')).strip()
     desc_clean = clean_desc(desc_raw)
     desc_fixed = _apply_fixes(desc_clean)
@@ -267,6 +286,16 @@ def normalize_item_for_store(item):
     it['valor'] = _norm_valor(it.get('valor', 0))
     if not categoria or categoria == 'outros':
         categoria = detect_category(desc_final or desc_fixed)
+    else:
+        if categoria not in {
+            'alimentacao','transporte','moradia','saude','lazer','vestuario','servicos','salario','vendas','outros','duvida'
+        }:
+            try:
+                categoria2 = detect_category(categoria)
+                if categoria2:
+                    categoria = categoria2
+            except:
+                pass
     it['categoria'] = categoria
     return it
 
@@ -328,7 +357,18 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
         doc["ref_id"] = build_ref_id(doc["data_referencia"], item_ref.id)
         batch.set(item_ref, doc)
         dref = root.collection("dias").document(doc["data_referencia"])
-        mref = root.collection("meses").document(doc["data_referencia"][:7])
+        mkey = doc["data_referencia"][:7]
+        mref = root.collection("meses").document(mkey)
+        try:
+            ano, m = mkey.split("-")
+            mref.set({"ano": int(ano), "mes": int(m)}, merge=True)
+        except:
+            mref.set({}, merge=True)
+        try:
+            ano_d, mes_d, dia_d = doc["data_referencia"].split("-")
+            batch.set(dref, {"ano": int(ano_d), "mes": int(mes_d), "dia": int(dia_d), "data": doc["data_referencia"]}, merge=True)
+        except:
+            batch.set(dref, {"data": doc["data_referencia"]}, merge=True)
         inc_d = {"atualizado_em": firestore.SERVER_TIMESTAMP}
         inc_m = {"atualizado_em": firestore.SERVER_TIMESTAMP}
         cat = str(base.get("categoria", "outros"))
@@ -336,67 +376,87 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
             inc_d.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_entrada": firestore.Increment(val),
-                "saldo_dia": firestore.Increment(val)
+                "totais_dia.total_entrada": firestore.Increment(val),
+                "totais_por_tipo.entrada": firestore.Increment(val),
+                "totais_dia.saldo_dia": firestore.Increment(val),
             })
             inc_m.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_entrada": firestore.Increment(val),
-                "saldo_mes": firestore.Increment(val)
+                "totais_mes.total_entrada": firestore.Increment(val),
+                "totais_por_tipo.entrada": firestore.Increment(val),
+                "totais_mes.saldo_mes": firestore.Increment(val),
             })
-            inc_m.update({f"categorias_entrada.{cat}": firestore.Increment(val)})
-            inc_d.update({f"categorias_entrada.{cat}": firestore.Increment(val)})
+            inc_m.update({f"categorias.entrada.{cat}": firestore.Increment(val)})
+            inc_d.update({f"categorias.entrada.{cat}": firestore.Increment(val)})
         elif tp_txt == "saida":
             inc_d.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_saida": firestore.Increment(val),
-                "saldo_dia": firestore.Increment(-val)
+                "totais_dia.total_saida": firestore.Increment(val),
+                "totais_por_tipo.saida": firestore.Increment(val),
+                "totais_dia.saldo_dia": firestore.Increment(-val),
             })
             inc_m.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_saida": firestore.Increment(val),
-                "saldo_mes": firestore.Increment(-val)
+                "totais_mes.total_saida": firestore.Increment(val),
+                "totais_por_tipo.saida": firestore.Increment(val),
+                "totais_mes.saldo_mes": firestore.Increment(-val),
             })
-            inc_m.update({f"categorias_saida.{cat}": firestore.Increment(val)})
-            inc_d.update({f"categorias_saida.{cat}": firestore.Increment(val)})
+            inc_m.update({f"categorias.saida.{cat}": firestore.Increment(val)})
+            inc_d.update({f"categorias.saida.{cat}": firestore.Increment(val)})
         elif tp_txt == "ajuste":
             inc_d.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_ajuste": firestore.Increment(val),
-                "saldo_dia": firestore.Increment(val)
+                "totais_dia.total_ajuste": firestore.Increment(val),
+                "totais_por_tipo.ajuste": firestore.Increment(val),
+                "totais_dia.saldo_dia": firestore.Increment(val),
             })
             inc_m.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_ajuste": firestore.Increment(val),
-                "saldo_mes": firestore.Increment(val)
+                "totais_mes.total_ajuste": firestore.Increment(val),
+                "totais_por_tipo.ajuste": firestore.Increment(val),
+                "totais_mes.saldo_mes": firestore.Increment(val),
             })
-            inc_m.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
-            inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+            inc_m.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
+            inc_d.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
         elif tp_txt == "estorno":
-            inc_d.update({"total_estorno": firestore.Increment(abs(val))})
-            inc_m.update({"total_estorno": firestore.Increment(abs(val))})
-            inc_m.update({f"categorias_estorno.{cat}": firestore.Increment(abs(val))})
-            inc_d.update({f"categorias_estorno.{cat}": firestore.Increment(abs(val))})
+            inc_d.update({
+                "quantidade_transacoes": firestore.Increment(1),
+                "quantidade_transacoes_validas": firestore.Increment(1),
+                "totais_dia.total_estorno": firestore.Increment(abs(val)),
+                "totais_por_tipo.estorno": firestore.Increment(abs(val)),
+                "totais_dia.saldo_dia": firestore.Increment(abs(val)),
+            })
+            inc_m.update({
+                "quantidade_transacoes": firestore.Increment(1),
+                "quantidade_transacoes_validas": firestore.Increment(1),
+                "totais_mes.total_estorno": firestore.Increment(abs(val)),
+                "totais_por_tipo.estorno": firestore.Increment(abs(val)),
+                "totais_mes.saldo_mes": firestore.Increment(abs(val)),
+            })
+            inc_m.update({f"categorias.estorno.{cat}": firestore.Increment(abs(val))})
+            inc_d.update({f"categorias.estorno.{cat}": firestore.Increment(abs(val))})
         else:
             inc_d.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_ajuste": firestore.Increment(val),
-                "saldo_dia": firestore.Increment(val)
+                "totais_dia.total_ajuste": firestore.Increment(val),
+                "totais_por_tipo.ajuste": firestore.Increment(val),
+                "totais_dia.saldo_dia": firestore.Increment(val),
             })
             inc_m.update({
                 "quantidade_transacoes": firestore.Increment(1),
                 "quantidade_transacoes_validas": firestore.Increment(1),
-                "total_ajuste": firestore.Increment(val),
-                "saldo_mes": firestore.Increment(val)
+                "totais_mes.total_ajuste": firestore.Increment(val),
+                "totais_por_tipo.ajuste": firestore.Increment(val),
+                "totais_mes.saldo_mes": firestore.Increment(val),
             })
-            inc_m.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
-            inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+            inc_m.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
+            inc_d.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
         batch.set(dref, inc_d, merge=True)
         batch.set(mref, inc_m, merge=True)
         try:
@@ -462,68 +522,93 @@ def salvar_transacao_cliente(dados, cliente_id="default", origem="api", referenc
                     inc_d.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_entrada": firestore.Increment(val),
-                        "saldo_dia": firestore.Increment(val)
+                        "totais_dia.total_entrada": firestore.Increment(val),
+                        "totais_por_tipo.entrada": firestore.Increment(val),
+                        "totais_dia.saldo_dia": firestore.Increment(val)
                     })
                     inc_m.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_entrada": firestore.Increment(val),
-                        "saldo_mes": firestore.Increment(val)
+                        "totais_mes.total_entrada": firestore.Increment(val),
+                        "totais_por_tipo.entrada": firestore.Increment(val),
+                        "totais_mes.saldo_mes": firestore.Increment(val)
                     })
-                    inc_m.update({f"categorias_entrada.{cat}": firestore.Increment(val)})
-                    inc_d.update({f"categorias_entrada.{cat}": firestore.Increment(val)})
+                    inc_m.update({f"categorias.entrada.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias.entrada.{cat}": firestore.Increment(val)})
                 elif tp_txt == "saida":
                     inc_d.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_saida": firestore.Increment(val),
-                        "saldo_dia": firestore.Increment(-val)
+                        "totais_dia.total_saida": firestore.Increment(val),
+                        "totais_por_tipo.saida": firestore.Increment(val),
+                        "totais_dia.saldo_dia": firestore.Increment(-val)
                     })
                     inc_m.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_saida": firestore.Increment(val),
-                        "saldo_mes": firestore.Increment(-val)
+                        "totais_mes.total_saida": firestore.Increment(val),
+                        "totais_por_tipo.saida": firestore.Increment(val),
+                        "totais_mes.saldo_mes": firestore.Increment(-val)
                     })
-                    inc_m.update({f"categorias_saida.{cat}": firestore.Increment(val)})
-                    inc_d.update({f"categorias_saida.{cat}": firestore.Increment(val)})
+                    inc_m.update({f"categorias.saida.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias.saida.{cat}": firestore.Increment(val)})
                 elif tp_txt == "ajuste":
                     inc_d.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_ajuste": firestore.Increment(val),
-                        "saldo_dia": firestore.Increment(val)
+                        "totais_dia.total_ajuste": firestore.Increment(val),
+                        "totais_por_tipo.ajuste": firestore.Increment(val),
+                        "totais_dia.saldo_dia": firestore.Increment(val)
                     })
                     inc_m.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_ajuste": firestore.Increment(val),
-                        "saldo_mes": firestore.Increment(val)
+                        "totais_mes.total_ajuste": firestore.Increment(val),
+                        "totais_por_tipo.ajuste": firestore.Increment(val),
+                        "totais_mes.saldo_mes": firestore.Increment(val)
                     })
-                    inc_m.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
-                    inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
+                    inc_m.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
                 elif tp_txt == "estorno":
-                    inc_d.update({"total_estorno": firestore.Increment(abs(val))})
-                    inc_m.update({"total_estorno": firestore.Increment(abs(val))})
-                    inc_m.update({f"categorias_estorno.{cat}": firestore.Increment(abs(val))})
-                    inc_d.update({f"categorias_estorno.{cat}": firestore.Increment(abs(val))})
+                    inc_d.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "totais_dia.total_estorno": firestore.Increment(abs(val)),
+                        "totais_por_tipo.estorno": firestore.Increment(abs(val)),
+                        "totais_dia.saldo_dia": firestore.Increment(abs(val)),
+                    })
+                    inc_m.update({
+                        "quantidade_transacoes": firestore.Increment(1),
+                        "quantidade_transacoes_validas": firestore.Increment(1),
+                        "totais_mes.total_estorno": firestore.Increment(abs(val)),
+                        "totais_por_tipo.estorno": firestore.Increment(abs(val)),
+                        "totais_mes.saldo_mes": firestore.Increment(abs(val)),
+                    })
+                    inc_m.update({f"categorias.estorno.{cat}": firestore.Increment(abs(val))})
+                    inc_d.update({f"categorias.estorno.{cat}": firestore.Increment(abs(val))})
                 else:
                     inc_d.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_ajuste": firestore.Increment(val),
-                        "saldo_dia": firestore.Increment(val)
+                        "totais_dia.total_ajuste": firestore.Increment(val),
+                        "totais_por_tipo.ajuste": firestore.Increment(val),
+                        "totais_dia.saldo_dia": firestore.Increment(val)
                     })
                     inc_m.update({
                         "quantidade_transacoes": firestore.Increment(1),
                         "quantidade_transacoes_validas": firestore.Increment(1),
-                        "total_ajuste": firestore.Increment(val),
-                        "saldo_mes": firestore.Increment(val)
+                        "totais_mes.total_ajuste": firestore.Increment(val),
+                        "totais_por_tipo.ajuste": firestore.Increment(val),
+                        "totais_mes.saldo_mes": firestore.Increment(val)
                     })
-                    inc_m.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
-                    inc_d.update({f"categorias_ajuste.{cat}": firestore.Increment(val)})
-                dref.set(inc_d, merge=True)
+                    inc_m.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
+                    inc_d.update({f"categorias.ajuste.{cat}": firestore.Increment(val)})
+                try:
+                    ano_d, mes_d, dia_d = ref_day.split("-")
+                    root.collection("dias").document(ref_day).set({"ano": int(ano_d), "mes": int(mes_d), "dia": int(dia_d), "data": ref_day}, merge=True)
+                except:
+                    root.collection("dias").document(ref_day).set({"data": ref_day}, merge=True)
+                root.collection("dias").document(ref_day).set(inc_d, merge=True)
                 mref.set(inc_m, merge=True)
                 try:
                     delta = 0.0
@@ -633,36 +718,27 @@ def estornar_transacao(cliente_id, referencia_id, motivo=None, origem="api"):
     inc_d = {"atualizado_em": firestore.SERVER_TIMESTAMP}
     inc_m = {"atualizado_em": firestore.SERVER_TIMESTAMP}
     abs_val = abs(val)
-    inc_d.update({"total_estorno": firestore.Increment(abs_val)})
-    inc_m.update({
-        "total_estorno": firestore.Increment(abs_val),
-        f"categorias_estorno.{cat}": firestore.Increment(abs_val),
-    })
+    try:
+        ano_d, mes_d, dia_d = dr.split("-")
+        batch.set(dref, {"ano": int(ano_d), "mes": int(mes_d), "dia": int(dia_d), "data": dr}, merge=True)
+    except:
+        batch.set(dref, {"data": dr}, merge=True)
     inc_d.update({
-        f"categorias_estorno.{cat}": firestore.Increment(abs_val),
+        "quantidade_transacoes": firestore.Increment(1),
+        "quantidade_transacoes_validas": firestore.Increment(1),
+        "totais_dia.total_estorno": firestore.Increment(abs_val),
+        "totais_por_tipo.estorno": firestore.Increment(abs_val),
+        "totais_dia.saldo_dia": firestore.Increment(abs_val),
+        f"categorias.estorno.{cat}": firestore.Increment(abs_val),
     })
-    if tp == "entrada":
-        inc_d.update({
-            "total_entrada": firestore.Increment(-val),
-            "saldo_dia": firestore.Increment(-val),
-            f"categorias_entrada.{cat}": firestore.Increment(-val),
-        })
-        inc_m.update({
-            "total_entrada": firestore.Increment(-val),
-            "saldo_mes": firestore.Increment(-val),
-            f"categorias_entrada.{cat}": firestore.Increment(-val),
-        })
-    else:
-        inc_d.update({
-            "total_saida": firestore.Increment(-val),
-            "saldo_dia": firestore.Increment(val),
-            f"categorias_saida.{cat}": firestore.Increment(-val),
-        })
-        inc_m.update({
-            "total_saida": firestore.Increment(-val),
-            "saldo_mes": firestore.Increment(val),
-            f"categorias_saida.{cat}": firestore.Increment(-val),
-        })
+    inc_m.update({
+        "quantidade_transacoes": firestore.Increment(1),
+        "quantidade_transacoes_validas": firestore.Increment(1),
+        "totais_mes.total_estorno": firestore.Increment(abs_val),
+        "totais_por_tipo.estorno": firestore.Increment(abs_val),
+        "totais_mes.saldo_mes": firestore.Increment(abs_val),
+        f"categorias.estorno.{cat}": firestore.Increment(abs_val),
+    })
     batch.set(dref, inc_d, merge=True)
     batch.set(mref, inc_m, merge=True)
     try:
@@ -762,21 +838,21 @@ def atualizar_categoria_transacao(cliente_id: str, referencia_id: str, nova_cate
     inc_m = {"atualizado_em": firestore.SERVER_TIMESTAMP}
     if tp_raw in ("entrada", "1", "receita"):
         inc_d.update({
-            f"categorias_entrada.{old_cat}": firestore.Increment(-val),
-            f"categorias_entrada.{novo_cat}": firestore.Increment(val),
+            f"categorias.entrada.{old_cat}": firestore.Increment(-val),
+            f"categorias.entrada.{novo_cat}": firestore.Increment(val),
         })
         inc_m.update({
-            f"categorias_entrada.{old_cat}": firestore.Increment(-val),
-            f"categorias_entrada.{novo_cat}": firestore.Increment(val),
+            f"categorias.entrada.{old_cat}": firestore.Increment(-val),
+            f"categorias.entrada.{novo_cat}": firestore.Increment(val),
         })
     elif tp_raw in ("saida", "0", "despesa"):
         inc_d.update({
-            f"categorias_saida.{old_cat}": firestore.Increment(-val),
-            f"categorias_saida.{novo_cat}": firestore.Increment(val),
+            f"categorias.saida.{old_cat}": firestore.Increment(-val),
+            f"categorias.saida.{novo_cat}": firestore.Increment(val),
         })
         inc_m.update({
-            f"categorias_saida.{old_cat}": firestore.Increment(-val),
-            f"categorias_saida.{novo_cat}": firestore.Increment(val),
+            f"categorias.saida.{old_cat}": firestore.Increment(-val),
+            f"categorias.saida.{novo_cat}": firestore.Increment(val),
         })
     batch.set(dref, inc_d, merge=True)
     batch.set(mref, inc_m, merge=True)
@@ -1128,18 +1204,38 @@ def recompute_cliente_aggregates(cliente_id: str):
                 day_cat_adj[cat] = float(day_cat_adj.get(cat, 0.0) or 0.0) + val
         saldo_dia = total_entrada - total_saida + total_ajuste
         try:
+            try:
+                ano_d, mes_d, dia_d = dr.split("-")
+            except:
+                ano_d = None
+                mes_d = None
+                dia_d = None
             root.collection("dias").document(dr).set({
-                "total_entrada": total_entrada,
-                "total_saida": total_saida,
-                "total_ajuste": total_ajuste,
-                "total_estorno": total_estorno,
-                "saldo_dia": saldo_dia,
+                "ano": (int(ano_d) if ano_d is not None else None),
+                "mes": (int(mes_d) if mes_d is not None else None),
+                "dia": (int(dia_d) if dia_d is not None else None),
+                "data": dr,
                 "quantidade_transacoes": qtd,
                 "quantidade_transacoes_validas": qtd_validas,
-                "categorias_entrada": dict({k: float(v or 0.0) for k, v in day_cat_inc.items()}),
-                "categorias_saida": dict({k: float(v or 0.0) for k, v in day_cat_exp.items()}),
-                "categorias_estorno": dict({k: float(v or 0.0) for k, v in day_cat_est.items()}),
-                "categorias_ajuste": dict({k: float(v or 0.0) for k, v in day_cat_adj.items()}),
+                "categorias": {
+                    "entrada": dict({k: float(v or 0.0) for k, v in day_cat_inc.items()}),
+                    "saida": dict({k: float(v or 0.0) for k, v in day_cat_exp.items()}),
+                    "estorno": dict({k: float(v or 0.0) for k, v in day_cat_est.items()}),
+                    "ajuste": dict({k: float(v or 0.0) for k, v in day_cat_adj.items()}),
+                },
+                "totais_por_tipo": {
+                    "entrada": float(sum(day_cat_inc.values()) or total_entrada),
+                    "saida": float(sum(day_cat_exp.values()) or total_saida),
+                    "estorno": float(sum(day_cat_est.values()) or total_estorno),
+                    "ajuste": float(sum(day_cat_adj.values()) or total_ajuste),
+                },
+                "totais_dia": {
+                    "total_entrada": total_entrada,
+                    "total_saida": total_saida,
+                    "total_estorno": total_estorno,
+                    "total_ajuste": total_ajuste,
+                    "saldo_dia": float(total_entrada - total_saida + total_estorno + total_ajuste),
+                },
                 "atualizado_em": firestore.SERVER_TIMESTAMP,
             }, merge=True)
         except Exception:
@@ -1147,22 +1243,46 @@ def recompute_cliente_aggregates(cliente_id: str):
         days_processed += 1
     months_processed = 0
     for mk, m in month_agg.items():
-        saldo_mes = m["total_entrada"] - m["total_saida"] + m["total_ajuste"]
+        tot_entrada = float(m.get("total_entrada", 0.0) or 0.0)
+        tot_saida = float(m.get("total_saida", 0.0) or 0.0)
+        tot_ajuste = float(m.get("total_ajuste", 0.0) or 0.0)
+        tot_estorno = float(m.get("total_estorno", 0.0) or 0.0)
+        saldo_mes = tot_entrada - tot_saida + tot_estorno + tot_ajuste
         try:
-            root.collection("meses").document(mk).set({
-                "total_entrada": float(m["total_entrada"] or 0.0),
-                "total_saida": float(m["total_saida"] or 0.0),
-                "total_ajuste": float(m["total_ajuste"] or 0.0),
-                "total_estorno": float(m["total_estorno"] or 0.0),
-                "saldo_mes": float(saldo_mes or 0.0),
-                "quantidade_transacoes": int(m["quantidade_transacoes"] or 0),
-                "quantidade_transacoes_validas": int(m["quantidade_transacoes_validas"] or 0),
-                "categorias_entrada": dict(m["categorias_entrada"] or {}),
-                "categorias_saida": dict(m["categorias_saida"] or {}),
-                "categorias_estorno": dict(m["categorias_estorno"] or {}),
-                "categorias_ajuste": dict(m["categorias_ajuste"] or {}),
+            ano_i = int(mk.split("-")[0])
+            mes_i = int(mk.split("-")[1])
+        except:
+            ano_i = None
+            mes_i = None
+        try:
+            doc = root.collection("meses").document(mk)
+            payload = {
+                "ano": ano_i,
+                "mes": mes_i,
+                "quantidade_transacoes": int(m.get("quantidade_transacoes", 0) or 0),
+                "quantidade_transacoes_validas": int(m.get("quantidade_transacoes_validas", 0) or 0),
+                "categorias": {
+                    "entrada": dict(m.get("categorias_entrada", {}) or {}),
+                    "saida": dict(m.get("categorias_saida", {}) or {}),
+                    "estorno": dict(m.get("categorias_estorno", {}) or {}),
+                    "ajuste": dict(m.get("categorias_ajuste", {}) or {}),
+                },
+                "totais_por_tipo": {
+                    "entrada": float(sum((m.get("categorias_entrada", {}) or {}).values()) or tot_entrada),
+                    "saida": float(sum((m.get("categorias_saida", {}) or {}).values()) or tot_saida),
+                    "estorno": float(sum((m.get("categorias_estorno", {}) or {}).values()) or tot_estorno),
+                    "ajuste": float(sum((m.get("categorias_ajuste", {}) or {}).values()) or tot_ajuste),
+                },
+                "totais_mes": {
+                    "total_entrada": tot_entrada,
+                    "total_saida": tot_saida,
+                    "total_estorno": tot_estorno,
+                    "total_ajuste": tot_ajuste,
+                    "saldo_mes": float(saldo_mes or 0.0),
+                },
                 "atualizado_em": firestore.SERVER_TIMESTAMP,
-            }, merge=True)
+            }
+            doc.set(payload, merge=True)
         except Exception:
             pass
         months_processed += 1
