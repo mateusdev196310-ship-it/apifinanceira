@@ -1596,13 +1596,11 @@ def total_mes():
     """Retorna totais do mês atual ou do mês fornecido."""
     mes_qs = request.args.get("mes")
     mes_atual = mes_qs or _month_key_sp()
-    cache_key = None
-    total_despesas = 0
-    total_receitas = 0
+    total_despesas = 0.0
+    total_receitas = 0.0
+    total_ajustes = 0.0
+    total_estornos = 0.0
     quantidade_transacoes_validas = 0
-    total_ajustes = 0
-    total_estornos = 0
-    
     try:
         db = get_db()
         cliente_id = str(request.args.get("cliente_id") or "default")
@@ -1612,82 +1610,9 @@ def total_mes():
             ensure_cliente(cliente_id, nome=cliente_nome, username=cliente_username)
         except:
             pass
-        cache_key = f"total_mes:{cliente_id}:{mes_atual}"
-        c = _cache_get_api(cache_key)
-        if c is not None:
-            return jsonify(c)
-        mref = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual).get()
-        mm = mref.to_dict() or {}
-        mt = _mm_totais(mm)
-        total_despesas = float(mt["saida"])
-        total_receitas = float(mt["entrada"])
-        total_ajustes = float(mt["ajuste"])
-        total_estornos = float(mt["estorno"])
-        saldo = float(mt["saldo"])
-        quantidade_transacoes_validas = int(mm.get("quantidade_transacoes_validas", mm.get("quantidade_transacoes", 0)) or 0)
-        if (total_despesas == 0 and total_receitas == 0 and total_ajustes == 0 and total_estornos == 0):
-            try:
-                ano, mes = mes_atual.split("-")
-                dt_ini = f"{ano}-{mes}-01"
-                if mes == "12":
-                    dt_fim = f"{int(ano)+1}-01-01"
-                else:
-                    dt_fim = f"{ano}-{int(mes)+1:02d}-01"
-                root = db.collection('clientes').document(cliente_id)
-                cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                end = datetime.strptime(dt_fim, "%Y-%m-%d")
-                td = tr = taj = tes = 0.0
-                while cur < end:
-                    dkey = cur.strftime("%Y-%m-%d")
-                    try:
-                        dd = root.collection('dias').document(dkey).get().to_dict() or {}
-                        _t = _dd_totais(dd)
-                        td += float(_t["saida"])
-                        tr += float(_t["entrada"])
-                        taj += float(_t["ajuste"])
-                        tes += float(_t["estorno"])
-                    except:
-                        pass
-                    cur = cur + timedelta(days=1)
-                total_despesas = td
-                total_receitas = tr
-                total_ajustes = taj
-                total_estornos = tes
-                saldo = total_receitas - total_despesas + total_estornos + total_ajustes
-            except:
-                pass
-        try:
-            if (total_despesas == 0 and total_receitas == 0 and total_ajustes == 0 and total_estornos == 0):
-                ano, mes = mes_atual.split("-")
-                dt_ini = f"{ano}-{mes}-01"
-                if mes == "12":
-                    dt_fim = f"{int(ano)+1}-01-01"
-                else:
-                    dt_fim = f"{ano}-{int(mes)+1:02d}-01"
-                root = db.collection('clientes').document(cliente_id)
-                td = tr = taj = tes = 0.0
-                q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
-                for d in q.stream():
-                    t = d.to_dict() or {}
-                    if t.get('estornado'):
-                        continue
-                    tp_raw = str(t.get('tipo', '')).strip().lower()
-                    val = float(t.get('valor', 0) or 0)
-                    if tp_raw in ('entrada', '1', 'receita'):
-                        tr += val
-                    elif tp_raw in ('saida', '0', 'despesa'):
-                        td += val
-                    elif tp_raw in ('ajuste',):
-                        taj += val
-                    elif tp_raw in ('estorno',):
-                        tes += abs(val)
-                total_despesas = float(td or 0)
-                total_receitas = float(tr or 0)
-                total_ajustes = float(taj or 0)
-                total_estornos = float(tes or 0)
-                saldo = total_receitas - total_despesas + total_estornos + total_ajustes
-        except:
-            pass
+        root = db.collection('clientes').document(cliente_id)
+        mm_doc = root.collection('meses').document(mes_atual).get()
+        mm = mm_doc.to_dict() or {}
         try:
             ano, mes = mes_atual.split("-")
             dt_ini = f"{ano}-{mes}-01"
@@ -1695,62 +1620,36 @@ def total_mes():
                 dt_fim = f"{int(ano)+1}-01-01"
             else:
                 dt_fim = f"{ano}-{int(mes)+1:02d}-01"
-            root = db.collection('clientes').document(cliente_id)
             cur = datetime.strptime(dt_ini, "%Y-%m-%d")
             end = datetime.strptime(dt_fim, "%Y-%m-%d")
-            qtd_sum = 0
             while cur < end:
                 dkey = cur.strftime("%Y-%m-%d")
                 try:
-                    # Reconta SEMPRE deduplicando itens + topo por dia
-                    items = []
-                    tops = []
+                    dd = root.collection('dias').document(dkey).get().to_dict() or {}
+                    _t = _dd_totais(dd)
+                    total_despesas += float(_t["saida"])
+                    total_receitas += float(_t["entrada"])
+                    total_ajustes += float(_t["ajuste"])
+                    total_estornos += float(_t["estorno"])
                     try:
-                        items = root.collection('transacoes').document(dkey).collection('items').stream()
+                        quantidade_transacoes_validas += int(dd.get("quantidade_transacoes_validas", dd.get("quantidade_transacoes", 0)) or 0)
                     except:
-                        items = []
-                    try:
-                        tops = root.collection('transacoes').where('data_referencia', '==', dkey).stream()
-                    except:
-                        tops = []
-                    idx = {}
-                    cnt = 0
-                    for it in items:
-                        o = it.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if idx.get(k):
-                            continue
-                        idx[k] = 1
-                        tp = str(o.get('tipo', '')).strip().lower()
-                        if tp in ('entrada', '1', 'receita') or tp in ('saida', '0', 'despesa') or tp in ('ajuste',):
-                            if not bool(o.get('estornado', False)):
-                                cnt += 1
-                    for it in tops:
-                        o = it.to_dict() or {}
-                        k = str(o.get('ref_id') or '') or (str(o.get('tipo', '')) + '|' + str(float(o.get('valor', 0) or 0)) + '|' + str(o.get('categoria', '')) + '|' + str(o.get('descricao', '')) + '|' + str(o.get('timestamp_criacao', '')))
-                        if idx.get(k):
-                            continue
-                        idx[k] = 1
-                        tp = str(o.get('tipo', '')).strip().lower()
-                        if tp in ('entrada', '1', 'receita') or tp in ('saida', '0', 'despesa') or tp in ('ajuste',):
-                            if not bool(o.get('estornado', False)):
-                                cnt += 1
-                    qtd_sum += cnt
+                        pass
                 except:
                     pass
                 cur = cur + timedelta(days=1)
-            quantidade_transacoes_validas = int(qtd_sum)
         except:
             pass
+        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
         try:
             mdoc = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual)
             mdoc.set({
                 "totais_mes": {
-                    "total_entrada": float(total_receitas or 0),
-                    "total_saida": float(total_despesas or 0),
-                    "total_ajuste": float(total_ajustes or 0),
-                    "total_estorno": float(total_estornos or 0),
-                    "saldo_mes": float((total_receitas - total_despesas + total_estornos + total_ajustes) or 0),
+                    "total_entrada": float(total_receitas or 0.0),
+                    "total_saida": float(total_despesas or 0.0),
+                    "total_ajuste": float(total_ajustes or 0.0),
+                    "total_estorno": float(total_estornos or 0.0),
+                    "saldo_mes": float(saldo or 0.0),
                 },
                 "quantidade_transacoes_validas": int(quantidade_transacoes_validas or 0),
                 "atualizado_em": firestore.SERVER_TIMESTAMP,
@@ -1770,7 +1669,6 @@ def total_mes():
             "quantidade_transacoes": int(mm.get("quantidade_transacoes", 0) or 0),
             "quantidade_transacoes_validas": int(quantidade_transacoes_validas)
         }
-        _cache_set_api(cache_key, resp, ttl=20)
         return jsonify(resp)
         
     except Exception as e:
@@ -1806,7 +1704,7 @@ def total_semana():
             total_estornos += float(td["estorno"])
             total_ajustes += float(td["ajuste"])
             dt_cur += timedelta(days=1)
-        saldo = total_receitas - total_despesas + total_ajustes
+        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
         return jsonify({
             "sucesso": True,
             "inicio": inicio_semana.strftime("%Y-%m-%d"),
@@ -1972,15 +1870,48 @@ def saldo_atual():
         # Caminho otimizado: sem agrupamento por categoria e sem filtros → usar agregados
         if not group_by and not cats and not tipo_filter:
             if mes:
-                mdoc = root.collection('meses').document(mes).get()
-                mm = mdoc.to_dict() or {}
-                mt = _mm_totais(mm)
-                total_despesas = float(mt["saida"])
-                total_receitas = float(mt["entrada"])
-                total_ajustes = float(mt["ajuste"])
-                total_estornos = float(mt["estorno"])
-                saldo = float(mt["saldo"])
-                saldo_real = saldo
+                try:
+                    ano, m = mes.split("-")
+                    dt_ini = f"{ano}-{m}-01"
+                    if m == "12":
+                        dt_fim = f"{int(ano)+1}-01-01"
+                    else:
+                        dt_fim = f"{ano}-{int(m)+1:02d}-01"
+                    dt_cur = datetime.strptime(dt_ini, "%Y-%m-%d")
+                    dt_end = datetime.strptime(dt_fim, "%Y-%m-%d")
+                    td = tr = taj = tes = 0.0
+                    while dt_cur < dt_end:
+                        dkey = dt_cur.strftime("%Y-%m-%d")
+                        try:
+                            dd = root.collection('dias').document(dkey).get().to_dict() or {}
+                            _t = _dd_totais(dd)
+                            td += float(_t["saida"])
+                            tr += float(_t["entrada"])
+                            taj += float(_t["ajuste"])
+                            tes += float(_t["estorno"])
+                        except:
+                            pass
+                        dt_cur = dt_cur + timedelta(days=1)
+                    total_despesas = float(td or 0)
+                    total_receitas = float(tr or 0)
+                    total_ajustes = float(taj or 0)
+                    total_estornos = float(tes or 0)
+                    saldo = total_receitas - total_despesas + total_estornos + total_ajustes
+                    try:
+                        root.collection('meses').document(mes).set({
+                            "totais_mes": {
+                                "total_entrada": total_receitas,
+                                "total_saida": total_despesas,
+                                "total_ajuste": total_ajustes,
+                                "total_estorno": total_estornos,
+                                "saldo_mes": saldo,
+                            },
+                            "atualizado_em": firestore.SERVER_TIMESTAMP,
+                        }, merge=True)
+                    except:
+                        pass
+                except:
+                    pass
                 try:
                     sr = 0.0
                     for mdoc2 in root.collection('meses').stream():
@@ -2005,98 +1936,6 @@ def saldo_atual():
                     saldo_real = float(sr or saldo)
                 except:
                     saldo_real = saldo
-                need_fallback = False
-                try:
-                    need_fallback = (total_despesas == 0.0 and total_receitas == 0.0 and total_ajustes == 0.0 and total_estornos == 0.0)
-                except:
-                    need_fallback = True
-                if need_fallback:
-                    try:
-                        ano, m = mes.split("-")
-                        dt_ini = f"{ano}-{m}-01"
-                        if m == "12":
-                            dt_fim = f"{int(ano)+1}-01-01"
-                        else:
-                            dt_fim = f"{ano}-{int(m)+1:02d}-01"
-                        dt_cur = datetime.strptime(dt_ini, "%Y-%m-%d")
-                        dt_end = datetime.strptime(dt_fim, "%Y-%m-%d")
-                        td = tr = taj = tes = 0.0
-                        while dt_cur < dt_end:
-                            dkey = dt_cur.strftime("%Y-%m-%d")
-                            try:
-                                dd = root.collection('dias').document(dkey).get().to_dict() or {}
-                                _t = _dd_totais(dd)
-                                td += float(_t["saida"])
-                                tr += float(_t["entrada"])
-                                taj += float(_t["ajuste"])
-                                tes += float(_t["estorno"])
-                            except:
-                                pass
-                            dt_cur = dt_cur + timedelta(days=1)
-                        total_despesas = float(td or 0)
-                        total_receitas = float(tr or 0)
-                        total_ajustes = float(taj or 0)
-                        total_estornos = float(tes or 0)
-                        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
-                        try:
-                            root.collection('meses').document(mes).set({
-                                "totais_mes": {
-                                    "total_entrada": total_receitas,
-                                    "total_saida": total_despesas,
-                                    "total_ajuste": total_ajustes,
-                                    "total_estorno": total_estornos,
-                                    "saldo_mes": saldo,
-                                },
-                                "atualizado_em": firestore.SERVER_TIMESTAMP,
-                            }, merge=True)
-                        except:
-                            pass
-                    except:
-                        pass
-                try:
-                    if (total_despesas == 0.0 and total_receitas == 0.0 and total_ajustes == 0.0 and total_estornos == 0.0):
-                        ano, m = mes.split("-")
-                        dt_ini = f"{ano}-{m}-01"
-                        if m == "12":
-                            dt_fim = f"{int(ano)+1}-01-01"
-                        else:
-                            dt_fim = f"{ano}-{int(m)+1:02d}-01"
-                        td = tr = taj = tes = 0.0
-                        q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
-                        for d in q.stream():
-                            t = d.to_dict() or {}
-                            if t.get('estornado'):
-                                continue
-                            tp_raw = str(t.get('tipo', '')).strip().lower()
-                            val = float(t.get('valor', 0) or 0)
-                            if tp_raw in ('entrada', '1', 'receita'):
-                                tr += val
-                            elif tp_raw in ('saida', '0', 'despesa'):
-                                td += val
-                            elif tp_raw in ('ajuste',):
-                                taj += val
-                            elif tp_raw in ('estorno',):
-                                tes += abs(val)
-                        total_despesas = float(td or 0)
-                        total_receitas = float(tr or 0)
-                        total_ajustes = float(taj or 0)
-                        total_estornos = float(tes or 0)
-                        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
-                        try:
-                            root.collection('meses').document(mes).set({
-                                "totais_mes": {
-                                    "total_entrada": total_receitas,
-                                    "total_saida": total_despesas,
-                                    "total_ajuste": total_ajustes,
-                                    "total_estorno": total_estornos,
-                                    "saldo_mes": saldo,
-                                },
-                                "atualizado_em": firestore.SERVER_TIMESTAMP,
-                            }, merge=True)
-                        except:
-                            pass
-                except:
-                    pass
             elif dt_ini and dt_fim:
                 # Somar agregados de 'dias' iterando pelo intervalo
                 dt_cur = datetime.strptime(dt_ini, "%Y-%m-%d")
@@ -2123,10 +1962,10 @@ def saldo_atual():
                             mo = mdoc3.to_dict() or {}
                             try:
                                 v = float(mo.get("saldo_mes")) if mo.get("saldo_mes") is not None else (
-                                    float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0)
+                                    float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_estorno", 0) or 0) + float(mo.get("total_ajuste", 0) or 0)
                                 )
                             except:
-                                v = (float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_ajuste", 0) or 0))
+                                v = (float(mo.get("total_entrada", 0) or 0) - float(mo.get("total_saida", 0) or 0) + float(mo.get("total_estorno", 0) or 0) + float(mo.get("total_ajuste", 0) or 0))
                             sr += float(v or 0)
                     base = datetime.strptime(f"{mes_f}-01", "%Y-%m-%d")
                     cur2 = base
@@ -2135,8 +1974,7 @@ def saldo_atual():
                         try:
                             dd2 = root.collection('dias').document(k).get().to_dict() or {}
                             td2 = _dd_totais(dd2)
-                            sr += float(td2["entrada"]) - float(td2["saida"]) + float(td2["ajuste"])
-                            sr += float(td2["entrada"]) - float(td2["saida"]) + float(td2["ajuste"])
+                            sr += float(td2["entrada"]) - float(td2["saida"]) + float(td2["estorno"]) + float(td2["ajuste"])
                         except:
                             pass
                         cur2 = cur2 + timedelta(days=1)
