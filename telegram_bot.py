@@ -129,7 +129,13 @@ def _req_json_cached(url, key, ttl=15, timeout=4):
     if v is not None:
         return v
     d = _req_json(url, timeout=timeout)
-    _cache_set(key, d, ttl)
+    try:
+        if isinstance(d, dict) and ('sucesso' in d) and (not d.get('sucesso')):
+            return d
+        if d:
+            _cache_set(key, d, ttl)
+    except:
+        pass
     return d
 async def _req_json_async(url, timeout=4):
     loop = asyncio.get_event_loop()
@@ -144,7 +150,13 @@ async def _req_json_cached_async(url, key, ttl=15, timeout=4):
     if v is not None:
         return v
     d = await _req_json_async(url, timeout=timeout)
-    _cache_set(key, d, ttl)
+    try:
+        if isinstance(d, dict) and ('sucesso' in d) and (not d.get('sucesso')):
+            return d
+        if d:
+            _cache_set(key, d, ttl)
+    except:
+        pass
     return d
 
 def _now_sp():
@@ -2143,6 +2155,15 @@ async def categorias_mes(query, context):
         categorias = (cat_api.get("categorias", {}) or {}) if cat_api.get("sucesso") else {}
         despesas = dict((categorias.get("despesas") or {}))
         receitas = dict((categorias.get("receitas") or {}))
+        if (not despesas and not receitas):
+            try:
+                cat_api2 = await _req_json_async(cat_group_url, timeout=6)
+            except:
+                cat_api2 = {}
+            if cat_api2.get("sucesso"):
+                categorias2 = (cat_api2.get("categorias", {}) or {})
+                despesas = dict((categorias2.get("despesas") or {}))
+                receitas = dict((categorias2.get("receitas") or {}))
         despesas = {k: float(v or 0) for k, v in despesas.items() if float(v or 0) > 0}
         receitas = {k: float(v or 0) for k, v in receitas.items() if float(v or 0) > 0}
         tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
@@ -2409,6 +2430,20 @@ async def detalhar_categoria_mes(query, context, categoria_key: str, off_saida: 
                 })
         except:
             itens = []
+        if not itens:
+            try:
+                extrato_api2 = await _req_json_async(extrato_mes_url, timeout=6)
+                for t in (extrato_api2.get("matches", []) if extrato_api2.get("sucesso") else []):
+                    tp_raw = str(t.get("tipo", "")).strip().lower()
+                    if tp_raw not in ("saida","entrada"):
+                        continue
+                    itens.append({
+                        "tipo": tp_raw,
+                        "valor": float(t.get("valor",0) or 0),
+                        "descricao": str(t.get("descricao","") or "")
+                    })
+            except:
+                pass
         try:
             total_mes_url = f"{API_URL}/total/mes?mes={mkey}&{qs}"
             tm_api = await _req_json_cached_async(total_mes_url, f"tmes:{cid}:{mkey}", ttl=15, timeout=4)
@@ -2513,6 +2548,12 @@ async def expandir_categorias_mes(query, context, limit: int = 6):
             transacoes = (extrato_api.get("transacoes", []) if extrato_api.get("sucesso") else []) or (extrato_api.get("matches", []) if extrato_api.get("sucesso") else [])
         except:
             transacoes = []
+        if not transacoes:
+            try:
+                extrato_api2 = await _req_json_async(extrato_url, timeout=6)
+                transacoes = (extrato_api2.get("matches", []) if extrato_api2.get("sucesso") else [])
+            except:
+                pass
         grupos = {}
         for t in transacoes or []:
             if t.get('estornado'):
