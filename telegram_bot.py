@@ -510,7 +510,7 @@ def _map_text_to_category(texto: str) -> str:
     except:
         pass
     return "outros"
-def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 6):
+def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 9):
     try:
         db = get_db()
         root = db.collection("clientes").document(str(cliente_id))
@@ -533,7 +533,7 @@ def _top_categorias_cliente(cliente_id: str, tipo: str, limit: int = 6):
 def _categoria_keyboard(ref_id: str, tipo: str, chat_id: str):
     base_prior = ["alimentacao", "transporte", "saude"]
     cats = [c for c in CATEGORY_LIST if c not in ("duvida", "outros")]
-    usados = _top_categorias_cliente(chat_id, tipo, limit=6)
+    usados = _top_categorias_cliente(chat_id, tipo, limit=9)
     usados = [c for c in usados if c in cats]
     lst = []
     seen = set()

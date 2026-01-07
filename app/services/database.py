@@ -733,15 +733,27 @@ def atualizar_categoria_transacao(cliente_id: str, referencia_id: str, nova_cate
     batch.update(tdoc_ref, upd)
     try:
         if dr and did:
-            tl_ref = root.collection("transacoes").document(did)
-            if tl_ref.get().exists:
-                batch.update(tl_ref, upd)
+            try:
+                for it in root.collection("transacoes").document(dr).collection("items").where("ref_id", "==", str(o.get("ref_id") or referencia_id)).stream():
+                    batch.update(it.reference, upd)
+            except:
+                pass
+            try:
+                for t in root.collection("transacoes").where("ref_id", "==", str(o.get("ref_id") or referencia_id)).stream():
+                    batch.update(t.reference, upd)
+            except:
+                pass
         else:
             dr2 = str(o.get("data_referencia") or "")
             if dr2 and len(dr2) == 10:
                 it_ref = root.collection("transacoes").document(dr2).collection("items").document(str(referencia_id))
                 if it_ref.get().exists:
                     batch.update(it_ref, upd)
+            try:
+                for t in root.collection("transacoes").where("ref_id", "==", str(referencia_id)).stream():
+                    batch.update(t.reference, upd)
+            except:
+                pass
     except Exception:
         pass
     dref = root.collection("dias").document(dr)
