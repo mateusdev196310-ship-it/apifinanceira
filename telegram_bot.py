@@ -2204,6 +2204,8 @@ async def categorias_mes(query, context):
                         despesas[cat] = float(despesas.get(cat, 0) or 0) + v
                     else:
                         receitas[cat] = float(receitas.get(cat, 0) or 0) + v
+            except:
+                pass
         despesas = {k: float(v or 0) for k, v in despesas.items() if float(v or 0) > 0}
         receitas = {k: float(v or 0) for k, v in receitas.items() if float(v or 0) > 0}
         tot_all = tm_api.get("total", {}) if tm_api.get("sucesso") else {}
