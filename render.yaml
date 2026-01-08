@@ -32,6 +32,10 @@ services:
         sync: false
       - key: BOT_MAX_CONCURRENCY
         value: 2
+      - key: BOT_DISABLE_LOCK
+        value: 1
+      - key: BOT_LOCK_TTL
+        value: 0
       - key: FIREBASE_CREDENTIALS
         sync: false
       - key: API_URL
