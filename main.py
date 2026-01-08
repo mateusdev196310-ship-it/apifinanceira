@@ -263,28 +263,14 @@ def main():
         t_mon.start()
         run_api()
     elif args.service == "bot":
-        _start_bot_thread()
-        t_sup = threading.Thread(target=_supervisor_loop, kwargs={"interval_seconds": 10}, daemon=True)
-        t_sup.start()
-        while True:
-            try:
-                time.sleep(3600)
-            except Exception:
-                break
+        run_bot()
     else:
         _start_api_thread()
         t_mon = threading.Thread(target=_consistency_monitor, kwargs={"interval_seconds": 300, "recent_hours": 8}, daemon=True)
         t_mon.start()
         t_h = threading.Thread(target=_health_monitor, kwargs={"interval_seconds": 30}, daemon=True)
         t_h.start()
-        _start_bot_thread()
-        t_sup = threading.Thread(target=_supervisor_loop, kwargs={"interval_seconds": 10}, daemon=True)
-        t_sup.start()
-        while True:
-            try:
-                time.sleep(3600)
-            except Exception:
-                break
+        run_bot()
 
 if __name__ == "__main__":
     main()
