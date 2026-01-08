@@ -154,7 +154,19 @@ async def _req_json_cached_async(url, key, ttl=15, timeout=4):
         if isinstance(d, dict) and ('sucesso' in d) and (not d.get('sucesso')):
             return d
         if d:
-            _cache_set(key, d, ttl)
+            try:
+                if isinstance(d, dict) and d.get('sucesso') and isinstance(d.get('total', {}), dict):
+                    tot = d.get('total', {}) or {}
+                    zr = (float(tot.get('receitas', 0) or 0) == 0.0 and float(tot.get('despesas', 0) or 0) == 0.0 and float(tot.get('ajustes', 0) or 0) == 0.0 and float(tot.get('estornos', 0) or 0) == 0.0)
+                    qv = int(d.get('quantidade_transacoes_validas', d.get('quantidade_transacoes', 0)) or 0)
+                    if zr and qv > 0:
+                        pass
+                    else:
+                        _cache_set(key, d, ttl)
+                else:
+                    _cache_set(key, d, ttl)
+            except:
+                _cache_set(key, d, ttl)
     except:
         pass
     return d

@@ -169,6 +169,11 @@ def run_bot():
         print("  PowerShell -> $env:TELEGRAM_BOT_TOKEN=\"SEU_TOKEN\"")
         sys.exit(1)
     try:
+        os.environ["BOT_DISABLE_LOCK"] = "1"
+        os.environ["BOT_LOCK_TTL"] = "0"
+    except Exception:
+        pass
+    try:
         import asyncio
         try:
             asyncio.get_event_loop()
@@ -258,14 +263,28 @@ def main():
         t_mon.start()
         run_api()
     elif args.service == "bot":
-        run_bot()
+        _start_bot_thread()
+        t_sup = threading.Thread(target=_supervisor_loop, kwargs={"interval_seconds": 10}, daemon=True)
+        t_sup.start()
+        while True:
+            try:
+                time.sleep(3600)
+            except Exception:
+                break
     else:
         _start_api_thread()
         t_mon = threading.Thread(target=_consistency_monitor, kwargs={"interval_seconds": 300, "recent_hours": 8}, daemon=True)
         t_mon.start()
         t_h = threading.Thread(target=_health_monitor, kwargs={"interval_seconds": 30}, daemon=True)
         t_h.start()
-        run_bot()
+        _start_bot_thread()
+        t_sup = threading.Thread(target=_supervisor_loop, kwargs={"interval_seconds": 10}, daemon=True)
+        t_sup.start()
+        while True:
+            try:
+                time.sleep(3600)
+            except Exception:
+                break
 
 if __name__ == "__main__":
     main()

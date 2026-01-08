@@ -1694,6 +1694,45 @@ def total_mes():
             pass
         saldo = total_receitas - total_despesas + total_estornos + total_ajustes
         try:
+            if (float(total_despesas or 0.0) == 0.0 and float(total_receitas or 0.0) == 0.0 and float(total_ajustes or 0.0) == 0.0 and float(total_estornos or 0.0) == 0.0):
+                ano, mes = mes_atual.split("-")
+                dt_ini = f"{ano}-{mes}-01"
+                if mes == "12":
+                    dt_fim = f"{int(ano)+1}-01-01"
+                else:
+                    dt_fim = f"{ano}-{int(mes)+1:02d}-01"
+                td2 = tr2 = taj2 = tes2 = 0.0
+                qv2 = 0
+                try:
+                    q = root.collection('transacoes').where('data_referencia', '>=', dt_ini).where('data_referencia', '<', dt_fim)
+                    for d in q.stream():
+                        t = d.to_dict() or {}
+                        if t.get('estornado'):
+                            continue
+                        tp_raw = str(t.get('tipo', '')).strip().lower()
+                        val = float(t.get('valor', 0) or 0)
+                        if tp_raw in ('entrada','1','receita'):
+                            tr2 += val
+                            qv2 += 1
+                        elif tp_raw in ('saida','0','despesa'):
+                            td2 += val
+                            qv2 += 1
+                        elif tp_raw in ('ajuste',):
+                            taj2 += val
+                            qv2 += 1
+                        elif tp_raw in ('estorno',):
+                            tes2 += abs(val)
+                except:
+                    pass
+                total_despesas = float(td2 or 0.0)
+                total_receitas = float(tr2 or 0.0)
+                total_ajustes = float(taj2 or 0.0)
+                total_estornos = float(tes2 or 0.0)
+                quantidade_transacoes_validas = int(quantidade_transacoes_validas or 0) + int(qv2 or 0)
+                saldo = total_receitas - total_despesas + total_estornos + total_ajustes
+        except:
+            pass
+        try:
             mdoc = db.collection('clientes').document(cliente_id).collection('meses').document(mes_atual)
             mdoc.set({
                 "totais_mes": {
