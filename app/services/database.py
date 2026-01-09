@@ -125,6 +125,102 @@ def init_firebase():
     global _app, _db
     if _db is not None:
         return _db
+    try:
+        tm = str(os.getenv("TEST_MODE") or "").strip().lower()
+    except Exception:
+        tm = ""
+    if tm in ("1", "true", "yes", "on"):
+        class _FakeDocSnap:
+            def __init__(self, _id, _data, _exists):
+                self.id = _id
+                self._data = _data
+                self.exists = bool(_exists)
+            def to_dict(self):
+                try:
+                    return dict(self._data or {})
+                except Exception:
+                    return {}
+        class _FakeDocRef:
+            def __init__(self, store, path):
+                self._store = store
+                self._path = path
+                try:
+                    self.id = path.rsplit("/", 1)[-1]
+                except Exception:
+                    self.id = path
+            def get(self):
+                data = self._store.get(self._path)
+                return _FakeDocSnap(self.id, (data or {}), (data is not None))
+            def set(self, payload, merge=True):
+                cur = dict(self._store.get(self._path) or {})
+                nxt = dict(payload or {})
+                if merge:
+                    try:
+                        for k, v in nxt.items():
+                            if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                                d = dict(cur.get(k) or {})
+                                for kk, vv in v.items():
+                                    d[kk] = vv
+                                cur[k] = d
+                            else:
+                                cur[k] = v
+                        self._store[self._path] = cur
+                        return
+                    except Exception:
+                        pass
+                self._store[self._path] = nxt
+            def delete(self):
+                try:
+                    if self._path in self._store:
+                        del self._store[self._path]
+                except Exception:
+                    pass
+            def collection(self, name):
+                return _FakeCollectionRef(self._store, f"{self._path}/{str(name)}")
+        class _FakeQueryRef:
+            def __init__(self, store, base_path, cond):
+                self._store = store
+                self._path = base_path
+                self._cond = cond
+            def stream(self):
+                return []
+        class _FakeCollectionRef:
+            def __init__(self, store, path):
+                self._store = store
+                self._path = path
+            def document(self, doc_id):
+                return _FakeDocRef(self._store, f"{self._path}/{str(doc_id)}")
+            def stream(self):
+                out = []
+                prefix = f"{self._path}/"
+                plen = len(self._path.split("/"))
+                for k, v in list(self._store.items()):
+                    if k.startswith(prefix):
+                        try:
+                            segs = k.split("/")
+                            if len(segs) == plen + 1:
+                                out.append(_FakeDocSnap(segs[-1], (v or {}), True))
+                        except Exception:
+                            pass
+                return out
+            def where(self, field, op, value):
+                return _FakeQueryRef(self._store, self._path, (field, op, value))
+        class _FakeFirestoreClient:
+            def __init__(self):
+                self._store = {}
+            def collection(self, name):
+                return _FakeCollectionRef(self._store, str(name))
+        class _FakeIncr:
+            def __init__(self, val):
+                self.value = val
+        class _FakeFirestore:
+            SERVER_TIMESTAMP = 0
+            @staticmethod
+            def Increment(val):
+                return _FakeIncr(val)
+        _db = _FakeFirestoreClient()
+        globals()["firestore"] = _FakeFirestore
+        return _db
     if firebase_admin is None or credentials is None or firestore is None:
         raise RuntimeError("firebase-admin não instalado")
     cred = credentials.Certificate(_cred_path())
@@ -1290,6 +1386,44 @@ def recompute_cliente_aggregates(cliente_id: str):
         "cliente_id": str(cliente_id),
         "dias_processados": days_processed,
         "meses_processados": months_processed,
+    }
+def purge_cliente_aggregates(cliente_id: str, purge_days: bool = True, purge_months: bool = True):
+    db = get_db()
+    root = _cliente_root(cliente_id)
+    deleted_days = 0
+    deleted_months = 0
+    try:
+        if purge_days:
+            try:
+                days = list(root.collection("dias").stream())
+            except Exception:
+                days = []
+            for d in days:
+                try:
+                    root.collection("dias").document(d.id).delete()
+                    deleted_days += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        if purge_months:
+            try:
+                months = list(root.collection("meses").stream())
+            except Exception:
+                months = []
+            for m in months:
+                try:
+                    root.collection("meses").document(m.id).delete()
+                    deleted_months += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return {
+        "cliente_id": str(cliente_id),
+        "dias_deletados": deleted_days,
+        "meses_deletados": deleted_months,
     }
 def migrate_all_clientes(delete_original: bool = False, recompute: bool = True):
     db = get_db()

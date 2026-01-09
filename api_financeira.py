@@ -1917,6 +1917,43 @@ def recompute_cliente():
         return jsonify({"sucesso": True, "resultado": res, "mes_atual": mes_atual, "total": total, "quantidade_transacoes_validas": qtd_validas})
     except Exception as e:
         return jsonify({"sucesso": False, "erro": str(e)}), 500
+@app.route('/rebuild/cliente', methods=['POST'])
+def rebuild_cliente():
+    data = request.json
+    if not data:
+        data = {}
+    try:
+        cliente_id = str(data.get("cliente_id") or request.args.get("cliente_id") or "default")
+        purge_days = bool(data.get("purge_days", True))
+        purge_months = bool(data.get("purge_months", True))
+        cliente_nome = str(data.get("cliente_nome") or request.args.get("cliente_nome") or "")
+        cliente_username = str(data.get("username") or request.args.get("username") or "")
+    except:
+        return jsonify({"sucesso": False, "erro": "Campos inválidos"}), 400
+    try:
+        try:
+            ensure_cliente(cliente_id, nome=cliente_nome, username=cliente_username)
+        except:
+            pass
+        from app.services.database import purge_cliente_aggregates, recompute_cliente_aggregates
+        res_purge = purge_cliente_aggregates(cliente_id, purge_days=purge_days, purge_months=purge_months)
+        res_recompute = recompute_cliente_aggregates(cliente_id)
+        db = get_db()
+        root = db.collection('clientes').document(cliente_id)
+        mes_atual = _month_key_sp()
+        mm = root.collection('meses').document(mes_atual).get().to_dict() or {}
+        mt = _mm_totais(mm)
+        total = {
+            "despesas": float(mt["saida"]),
+            "receitas": float(mt["entrada"]),
+            "ajustes": float(mt["ajuste"]),
+            "estornos": float(mt["estorno"]),
+            "saldo": float(mt["saldo"]),
+        }
+        qtd_validas = int(mm.get("quantidade_transacoes_validas", mm.get("quantidade_transacoes", 0)) or 0)
+        return jsonify({"sucesso": True, "resultado": {"purge": res_purge, "recompute": res_recompute}, "mes_atual": mes_atual, "total": total, "quantidade_transacoes_validas": qtd_validas})
+    except Exception as e:
+        return jsonify({"sucesso": False, "erro": str(e)}), 500
 @app.route('/saldo/atual', methods=['GET'])
 def saldo_atual():
     inicio = request.args.get('inicio')
@@ -2413,7 +2450,7 @@ def saldo_atual():
                 total_ajustes += val
             elif tp == 'estorno':
                 total_estornos += val
-        saldo = total_receitas - total_despesas + total_ajustes
+        saldo = total_receitas - total_despesas + total_estornos + total_ajustes
         resp = {
             "sucesso": True,
             "filtros": {
