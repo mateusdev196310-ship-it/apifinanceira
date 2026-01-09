@@ -2334,6 +2334,21 @@ def saldo_atual():
                         dt_cur = dt_cur + timedelta(days=1)
                     try:
                         mdoc_set2 = root.collection('meses').document(mes)
+                        sum_exp = float(sum(_normalize_catmap(cat_exp).values()) or 0.0)
+                        sum_inc = float(sum(_normalize_catmap(cat_inc).values()) or 0.0)
+                        sum_est = float(sum(_normalize_catmap(cat_est).values()) or 0.0)
+                        sum_adj = float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_por_tipo", {}) or {}).get("ajuste", 0.0)))
+                        # Manter consistência: não sobrescrever totais do mês com 0 se já existem valores
+                        mt_existing = _mm_totais(mm)
+                        mm_total_saida = float(mt_existing["saida"])
+                        mm_total_entrada = float(mt_existing["entrada"])
+                        mm_total_estorno = float(mt_existing["estorno"])
+                        mm_total_ajuste = float(mt_existing["ajuste"])
+                        total_saida_new = float(sum_exp or mm_total_saida)
+                        total_entrada_new = float(sum_inc or mm_total_entrada)
+                        total_estorno_new = float(sum_est or mm_total_estorno)
+                        total_ajuste_new = float(sum_adj or mm_total_ajuste)
+                        saldo_new = float(total_entrada_new - total_saida_new + total_estorno_new + total_ajuste_new)
                         mdoc_set2.set({
                             "categorias": {
                                 "saida": {k: float(v or 0) for k, v in _normalize_catmap(cat_exp).items()},
@@ -2342,17 +2357,17 @@ def saldo_atual():
                                 "ajuste": dict((mm.get("categorias", {}) or {}).get("ajuste", {}) or {}),
                             },
                             "totais_por_tipo": {
-                                "saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
-                                "entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
-                                "estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
-                                "ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_por_tipo", {}) or {}).get("ajuste", 0.0))),
+                                "saida": float(sum_exp or mm_total_saida),
+                                "entrada": float(sum_inc or mm_total_entrada),
+                                "estorno": float(sum_est or mm_total_estorno),
+                                "ajuste": float(sum_adj or mm_total_ajuste),
                             },
                             "totais_mes": {
-                                "total_saida": float(sum(_normalize_catmap(cat_exp).values()) or 0.0),
-                                "total_entrada": float(sum(_normalize_catmap(cat_inc).values()) or 0.0),
-                                "total_estorno": float(sum(_normalize_catmap(cat_est).values()) or 0.0),
-                                "total_ajuste": float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or float((mm.get("totais_mes", {}) or {}).get("total_ajuste", 0.0))),
-                                "saldo_mes": float((float(sum(_normalize_catmap(cat_inc).values()) or 0.0) - float(sum(_normalize_catmap(cat_exp).values()) or 0.0) + float(sum(_normalize_catmap(cat_est).values()) or 0.0) + float(sum((mm.get("categorias", {}) or {}).get("ajuste", {}).values()) or 0.0))),
+                                "total_saida": total_saida_new,
+                                "total_entrada": total_entrada_new,
+                                "total_estorno": total_estorno_new,
+                                "total_ajuste": total_ajuste_new,
+                                "saldo_mes": saldo_new,
                             },
                             "atualizado_em": firestore.SERVER_TIMESTAMP,
                         }, merge=True)
@@ -2604,7 +2619,7 @@ def health_consistency():
             "ajustes": taj,
             "estornos": tes,
         }
-        mes_dias["saldo"] = mes_dias["receitas"] - mes_dias["despesas"] + mes_dias["ajustes"]
+        mes_dias["saldo"] = mes_dias["receitas"] - mes_dias["despesas"] + mes_dias["estornos"] + mes_dias["ajustes"]
         resp = {
             "sucesso": True,
             "cliente_id": cliente_id,
